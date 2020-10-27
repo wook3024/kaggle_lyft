@@ -743,9 +743,10 @@ class LyftMultiModel(LightningModule):
         self.cur_epoch = 1
         self.start = time.time()
         self.iterations = []
-        self.avg_loss = []
-        self.avg_val_loss = []
+        self.avg_losses = []
+        self.avg_val_losses = []
         self.times = []
+        self.avg_loss = 0.0
         model_name = cfg["model_params"]["model_name"]
         try:
             os.mkdir(f'./result')
@@ -881,7 +882,9 @@ class LyftMultiModel(LightningModule):
         # Forward pass
         loss = pytorch_neg_multi_log_likelihood_batch(targets, preds, confidences, target_availabilities)
         # return pred, confidences
-        return loss
+        return train_logs = {
+            'loss': loss,
+        }
 
     @torch.no_grad()
     def validation_step(self, batch, batch_idx):
@@ -897,37 +900,30 @@ class LyftMultiModel(LightningModule):
         # Forward pass
         loss = pytorch_neg_multi_log_likelihood_batch(targets, preds, confidences, target_availabilities)
         # return pred, confidences
-        return loss
-    
-    # def training_epoch_end(self, training_step_outputs):
-    #     avg_val_loss = torch.mean(torch.tensor([x['val_loss'] for x in outputs]))
-    #     avg_loss = torch.mean(torch.tensor([x['mse'] for x in outputs]))
         
-    #     tensorboard_logs = {'val_loss': avg_loss, "loss": avg_loss}
-
-    #     torch.cuda.empty_cache()
-    #     gc.collect()
-
-    #     return {
-    #         'val_loss': avg_loss,
-    #         'log': tensorboard_logs,
-    #         "progress_bar": {"val_loss": tensorboard_logs["val_loss"], "loss": tensorboard_logs["loss"]}
-    #     }
+        return val_logs = {
+            'val_loss': loss,
+        }
+    
+    def training_epoch_end(self, training_step_outputs):
+        avg_loss = torch.mean(torch.tensor([x['loss'] for x in training_step_outputs]))
+        self.avg_loss = avg_loss
+        
 
     def validation_epoch_end(self, validation_step_outputs):
         avg_val_loss = torch.mean(torch.tensor([x['val_loss'] for x in validation_step_outputs]))
-        avg_loss = torch.mean(torch.tensor([x['loss'] for x in validation_step_outputs]))
+        avg_loss = self.avg_loss
         
         tensorboard_logs = {'val_loss': avg_val_loss, "loss": avg_loss}
 
         torch.save(model.state_dict(), f'{os.getcwd()}/result/test/{model_name}/models/sava_model_{self.cur_epoch}.pth')
         self.iterations.append(self.cur_epoch)
-        self.avg_loss.append(avg_loss)
-        self.avg_val_loss.append(avg_val_loss)
+        self.avg_losses.append(avg_loss)
+        self.avg_val_losses.append(avg_val_loss)
         self.times.append((time.time()-self.start)/60)
         self.start = time.time()
         
-        results = pd.DataFrame({'iterations': self.iterations, 'avg_loss': self.avg_loss, 'avg_val_loss': self.avg_val_loss, 'elapsed_time (mins)': self.times})
+        results = pd.DataFrame({'iterations': self.iterations, 'avg_losses': self.avg_losses, 'avg_val_losses': self.avg_val_losses, 'elapsed_time (mins)': self.times})
         results.to_csv(f"{os.getcwd()}/result/test/{model_name}/results/train_metric{self.cur_epoch}.csv", index = False)
 
         torch.cuda.empty_cache()
