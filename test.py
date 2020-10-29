@@ -75,7 +75,7 @@ cfg = {
         'future_num_frames': 50,
         'future_step_size': 1,
         'future_delta_time': 0.1,
-        'model_name': "resnet18+267+adamp+0.2+10+1e-4+separate_modes",
+        'model_name': "eachstackingmodel+267+adamp+0.2+10+1e-4+separate_modes+threshold_0.0",
         # 'model_name': "lr_finder_test",
         'lr': 1e-4,
         # 'weight_path': "./result/test/resnet18+267+adamp+0.5+10_history_num_frames/models/save_model_1.pth",
@@ -93,14 +93,14 @@ cfg = {
         'satellite_map_key': 'aerial_map/aerial_map.png',
         'semantic_map_key': 'semantic_map/semantic_map.pb',
         'dataset_meta_key': 'meta.json',
-        'filter_agents_threshold': 0.5,
+        'filter_agents_threshold': 0.0,
         'disable_traffic_light_faces': False
         
     },
 
     'train_data_loader': {
         'key': 'scenes/sample.zarr',
-        'batch_size': 8,
+        'batch_size': 4,
         'shuffle': True,
         'num_workers': 8
     },
@@ -311,7 +311,39 @@ def pytorch_neg_multi_log_likelihood_single(
 
 
 
+class ResNet(nn.Module):
+    def __init__(self, in_features, out_features, kernel_size, dropout=0.0):
+        super(ResNet, self).__init__()
+        assert kernel_size % 2 == 1
+        self.conv1 = nn.Sequential(
+            nn.Conv2d(
+                in_features,
+                out_features,
+                kernel_size,
+                stride=1,
+                padding=(kernel_size - 1) // 2,
+            ),
+            nn.BatchNorm2d(out_features),
+            nn.LeakyReLU(inplace=True),
+            nn.Dropout(dropout),
+        )
+        self.conv2 = nn.Sequential(
+            nn.Conv2d(
+                out_features,
+                out_features,
+                kernel_size,
+                stride=1,
+                padding=(kernel_size - 1) // 2,
+            ),
+            nn.BatchNorm2d(out_features),
+            nn.LeakyReLU(inplace=True),
+            nn.Dropout(dropout),
+        )
 
+    def forward(self, x):
+        x = self.conv1(x)
+        out = self.conv2(x) + x
+        return out
 
 
 class LyftMultiModel(LightningModule):
@@ -414,6 +446,9 @@ class LyftMultiModel(LightningModule):
         self.future_len = cfg["model_params"]["future_num_frames"]
         num_targets = 2 * self.future_len
 
+
+        # backbone_out_features = 256 + 128 + 64 + 32
+        backbone_out_features = 256 + 128 + 64 + 32 + 16
         # You can add more layers here.
         self.head = nn.Sequential(
             # nn.Dropout(0.2),
@@ -426,22 +461,84 @@ class LyftMultiModel(LightningModule):
         self.x_preds = nn.Linear(4096, out_features=self.num_preds)
         self.x_modes = nn.Linear(4096, out_features=self.num_modes)
 
-    def forward(self, x):
-        x = self.backbone.conv1(x)
-        x = self.backbone.bn1(x)
-        x = self.backbone.relu(x)
-        x = self.backbone.maxpool(x)
+        dropout_rate = 0.2
+        # self.resnet1 = ResNet(
+        #     num_in_channels, 512, kernel_size=3, dropout=dropout_rate
+        # )
+        # self.deconv1 = nn.ConvTranspose2d(
+        #     512, 512, kernel_size=3, stride=2, padding=1
+        # )
+        # self.resnet2 = ResNet(
+        #     num_in_channels, 256, kernel_size=5, dropout=dropout_rate
+        # )
+        # self.deconv2 = nn.ConvTranspose2d(
+        #     256, 256, kernel_size=3, stride=2, padding=1
+        # )
+        # self.resnet3 = ResNet(
+        #     256, 128, kernel_size=7, dropout=dropout_rate
+        # )
+        # self.deconv3 = nn.ConvTranspose2d(
+        #     128, 128, kernel_size=3, stride=2, padding=1
+        # )
+        # self.resnet4 = ResNet(
+        #     128, 64, kernel_size=9, dropout=dropout_rate
+        # )
+        # self.deconv4 = nn.ConvTranspose2d(
+        #     64, 64, kernel_size=3, stride=2, padding=1
+        # )
+        # self.resnet5 = ResNet(
+        #     64, 32, kernel_size=11, dropout=dropout_rate
+        # )
+        # self.deconv5 = nn.ConvTranspose2d(
+        #     32, 32, kernel_size=3, stride=2, padding=1
+        # )
 
-        x = self.backbone.layer1(x)
-        x = self.backbone.layer2(x)
-        x = self.backbone.layer3(x)
-        x = self.backbone.layer4(x)
+        self.resnet1 = ResNet(
+            num_in_channels, 256, kernel_size=3, dropout=dropout_rate
+        )
+        self.resnet2 = ResNet(
+            num_in_channels, 128, kernel_size=3, dropout=dropout_rate
+        )
+        self.resnet3 = ResNet(
+            num_in_channels, 64, kernel_size=3, dropout=dropout_rate
+        )
+        self.resnet4 = ResNet(
+            num_in_channels, 32, kernel_size=3, dropout=dropout_rate
+        )
+        self.resnet5 = ResNet(
+            num_in_channels, 16, kernel_size=3, dropout=dropout_rate
+        )
+        
+        
+
+    def forward(self, x):
+        outs = []
+        # for i in range(2, 6):
+        #     # print("#########################", i)
+        #     x = getattr(self, f"resnet{i}")(x)
+        #     out = getattr(self, f"deconv{i}")(x)
+        #     outs.append(out)
+        for i in range(1, 6):
+            out = getattr(self, f"resnet{i}")(x)
+            outs.append(out)
+        
+        x = torch.cat(outs, dim=1)
+        # x = self.backbone.conv1(x)
+        # x = self.backbone.bn1(x)
+        # x = self.backbone.relu(x)
+        # x = self.backbone.maxpool(x)
+
+        # x = self.backbone.layer1(x)
+        # x = self.backbone.layer2(x)
+        # x = self.backbone.layer3(x)
+        # x = self.backbone.layer4(x)
 
         x = self.backbone.avgpool(x)
         x = torch.flatten(x, 1)
 
         x = self.head(x)
         # x = self.logit(x)
+        
         preds = self.x_preds(x)
         modes = self.x_modes(x)
 
@@ -594,7 +691,7 @@ weight_path = cfg["model_params"]["weight_path"]
 if weight_path:
     model.load_state_dict(torch.load(weight_path))
 
-trainer = Trainer(max_epochs=3, logger=logger, checkpoint_callback=checkpoint_callback, limit_val_batches=0.2, gpus=[0])
+trainer = Trainer(max_epochs=3, logger=logger, checkpoint_callback=checkpoint_callback, limit_val_batches=0.2, gpus=[1])
 
 # # Run learning rate finder
 # lr_finder = trainer.tuner.lr_find(model)
