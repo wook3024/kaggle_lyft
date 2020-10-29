@@ -1,52 +1,3 @@
-# import torch 
-# import os
-
-# os.environ["CUDA_DEVICE_ORDER"]="PCI_BUS_ID"   
-# os.environ["CUDA_VISIBLE_DEVICES"]="1"
-
-# model = torch.hub.load('pytorch/vision:v0.6.0', 'resnext50_32x4d', pretrained=True)
-# print(model)
-
-# # Lyft: Complete train and prediction pipeline (update for l5kit 1.1.0)
-# 
-# ![](http://www.l5kit.org/_images/av.jpg)
-# <cite>The image from L5Kit official document: <a href="http://www.l5kit.org/README.html">http://www.l5kit.org/README.html</a></cite>
-# 
-# #### This notebook is updated to be compatible with the new lyft environment, see the discussion [We did it all wrong](https://www.kaggle.com/c/lyft-motion-prediction-autonomous-vehicles/discussion/186492) and [l5kit 1.1.0 release](https://www.kaggle.com/c/lyft-motion-prediction-autonomous-vehicles/discussion/187825).
-# 
-# For a high level overview, check out this article [how to build a motion prediction model for autonomous vehicles](https://medium.com/lyftlevel5/how-to-build-a-motion-prediction-model-for-autonomous-vehicles-29f7f81f1580).
-# 
-# In this notebook I present an **end-to-end** train and prediction pipeline to predict vehicle motions with a pretrained model included. Unfortunately because of Kaggle memory constraint we can only either run the train part or the prediction part by toggling the parameters in the config part. 
-# 
-# Some of the code here are taken from the [tutorial notebook](https://github.com/lyft/l5kit/tree/master/examples/agent_motion_prediction) and the following kernels:
-# 
-# - [Lyft: Training with multi-mode confidence](https://www.kaggle.com/corochann/lyft-training-with-multi-mode-confidence)
-# - [Lyft: Prediction with multi-mode confidence](https://www.kaggle.com/corochann/lyft-prediction-with-multi-mode-confidence)
-# 
-# which is part of a wonderful series of introductory notebooks by [corochann](https://www.kaggle.com/corochann)
-# 
-#  - [Lyft: Comprehensive guide to start competition](https://www.kaggle.com/corochann/lyft-comprehensive-guide-to-start-competition)
-#  - [Lyft: Deep into the l5kit library](https://www.kaggle.com/corochann/lyft-deep-into-the-l5kit-library)
-#  - [Save your time, submit without kernel inference](https://www.kaggle.com/corochann/save-your-time-submit-without-kernel-inference)
-#  - [Lyft: pytorch implementation of evaluation metric](https://www.kaggle.com/corochann/lyft-pytorch-implementation-of-evaluation-metric)
-#  - [Lyft: Training with multi-mode confidence](https://www.kaggle.com/corochann/lyft-training-with-multi-mode-confidence)
-#  - [Lyft: Prediction with multi-mode confidence](https://www.kaggle.com/corochann/lyft-prediction-with-multi-mode-confidence)
-#  
-# **Note:** This notebook aims to create the best single possible, i.e. without any ensemeble, which should only be done near the end of the competition. Since it is still early in the competition, this notebook is still a baseline, any suggestion to improve is appreciated.
-
-# # Environment setup
-# 
-#  - Please add [pestipeti/lyft-l5kit-unofficial-fix](https://www.kaggle.com/pestipeti/lyft-l5kit-unofficial-fix) as utility script.
-#     - Official utility script "[philculliton/kaggle-l5kit](https://www.kaggle.com/mathurinache/kaggle-l5kit)" does not work with pytorch GPU.
-# 
-# Click "File" botton on top-left, and choose "Add utility script". For the pop-up search window, you need to remove "Your Work" filter, and search [pestipeti/lyft-l5kit-unofficial-fix](https://www.kaggle.com/pestipeti/lyft-l5kit-unofficial-fix) on top-right of the search window. Then you can add the kaggle-l5kit utility script. It is much faster to do this rather than !pip install l5kit every time you run the notebook. 
-# 
-# If successful, you can see "usr/lib/lyft-l5kit-unofficial-fix" is added to the "Data" section of this kernel page on right side of the kernel.
-# 
-# - Also please add [pretrained baseline model](https://www.kaggle.com/huanvo/lyft-pretrained-model-hv)
-# 
-# Click on the button "Add data" in the "Data" section and search for lyft-pretrained-model-hv. If you find the model useful, please upvote it as well.  
-
 from __future__ import print_function, division, absolute_import
 from typing import Dict
 
@@ -124,9 +75,11 @@ cfg = {
         'future_num_frames': 50,
         'future_step_size': 1,
         'future_delta_time': 0.1,
-        'model_name': "resnet18+267+0.5+adamp+10_history_num_frames",
-        'lr': 1e-3,
-        # 'weight_path': "../input/lyft-pretrained-model-hv/model_multi_update_lyft_public.pth",
+        'model_name': "resnet18+267+adamp+0.2+10+1e-4+separate_modes",
+        # 'model_name': "lr_finder_test",
+        'lr': 1e-4,
+        # 'weight_path': "./result/test/resnet18+267+adamp+0.5+10_history_num_frames/models/save_model_1.pth",
+        # 'weight_path': "./model_resnet34_output_0.pth",
         'weight_path': None,
         'train': True,
         'predict': False
@@ -140,7 +93,9 @@ cfg = {
         'satellite_map_key': 'aerial_map/aerial_map.png',
         'semantic_map_key': 'semantic_map/semantic_map.pb',
         'dataset_meta_key': 'meta.json',
-        'filter_agents_threshold': 0.5
+        'filter_agents_threshold': 0.5,
+        'disable_traffic_light_faces': False
+        
     },
 
     'train_data_loader': {
@@ -246,17 +201,6 @@ print("==================================VAL DATA===============================
 print(val_dataset)
 
 
-#====== INIT TEST DATASET=============================================================
-# test_cfg = cfg["test_data_loader"]
-# rasterizer = build_rasterizer(cfg, dm)
-# test_zarr = ChunkedDataset(dm.require(test_cfg["key"])).open()
-# test_mask = np.load(f"{DIR_INPUT}/scenes/mask.npz")["arr_0"]
-# test_dataset = AgentDataset(cfg, test_zarr, rasterizer, agents_mask=test_mask)
-# test_dataloader = DataLoader(test_dataset,shuffle=test_cfg["shuffle"],batch_size=test_cfg["batch_size"],
-#                              num_workers=test_cfg["num_workers"])
-print("==================================TEST DATA==================================")
-# print(test_dataset)
-
 # ## Simple visualization
 
 # Let us visualize how an input to the model looks like.
@@ -274,9 +218,9 @@ def visualize_trajectory(dataset, index, title="target_positions movement with d
     plt.show()
 
 
-# for i in range(11):
-plt.figure(figsize = (8,6))
-visualize_trajectory(train_dataset, index=(90))
+# for i in range(3):
+#     plt.figure(figsize = (8,6))
+#     visualize_trajectory(train_dataset, index=(90 + i))
 
 # ## Loss function
 
@@ -361,6 +305,332 @@ def pytorch_neg_multi_log_likelihood_single(
 # ## Model
 
 # Next we define the baseline model. Note that this model will return three possible trajectories together with confidence score for each trajectory.
+
+
+
+
+
+
+
+
+
+class LyftMultiModel(LightningModule):
+
+    def __init__(self):
+        super().__init__()
+        
+        self.lr = cfg["model_params"]["lr"]
+        self.num_modes = 3
+        self.cur_epoch = 1
+        self.start = time.time()
+        self.iterations = []
+        self.avg_losses = []
+        self.avg_val_losses = []
+        self.times = []
+        self.avg_loss = 0.0
+        model_name = cfg["model_params"]["model_name"]
+
+        # self.save_hyperparameters(
+        #     dict(
+        #         # NUM_MODES = self.num_modes,
+        #         # MODEL_NAME = model_name,
+        #         # TRAIN_ZARR = cfg["train_data_loader"]["key"],
+        #         # batch_size = cfg["train_data_loader"]["batch_size"],
+        #         lr=cfg["model_params"]["lr"],
+        #         # num_workers=cfg["train_data_loader"]["num_workers"]
+        #     )
+        # )
+
+        try:
+            os.mkdir(f'./result')
+        except:
+            pass
+        try:
+            os.mkdir(f'./result/test')
+        except:
+            pass
+        try:
+            os.mkdir(f'./result/test/{model_name}')
+        except:
+            pass
+        try:
+            os.mkdir(f'./result/test/{model_name}/results')
+        except:
+            pass
+        try:
+            os.mkdir(f'./result/test/{model_name}/models')
+        except:
+            pass
+        try:
+            os.mkdir(f'./result/test/{model_name}/logs')
+        except:
+            print(f'{model_name} folder is already exgist!')
+
+
+        architecture = cfg["model_params"]["model_architecture"]
+        backbone = eval(architecture)(pretrained=True, progress=True)
+        # backbone = torch.hub.load('pytorch/vision:v0.6.0', 'resnext101_32x8d', pretrained=True)
+        # backbone = torch.hub.load('zhanghang1989/ResNeSt', 'resnest50', pretrained=True)
+        
+        # print(backbone)
+        self.backbone = backbone
+
+        num_history_channels = (cfg["model_params"]["history_num_frames"] + 1) * 2
+        num_in_channels = 3 + num_history_channels
+        
+        # num_in_channels *= 2
+
+
+        if architecture == "resnest50" or architecture == "resnest101":
+            self.backbone.conv1[0] = nn.Conv2d(
+                num_in_channels,
+                self.backbone.conv1[0].out_channels,
+                kernel_size=self.backbone.conv1[0].kernel_size,
+                stride=self.backbone.conv1[0].stride,
+                padding=self.backbone.conv1[0].padding,
+                bias=False,
+            )
+        else:
+            self.backbone.conv1 = nn.Conv2d(
+                num_in_channels,
+                self.backbone.conv1.out_channels,
+                kernel_size=self.backbone.conv1.kernel_size,
+                stride=self.backbone.conv1.stride,
+                padding=self.backbone.conv1.padding,
+                bias=False,
+            )
+        
+        
+
+        # This is 512 for resnet18 and resnet34;
+        # And it is 2048 for the other resnets
+        
+        if architecture == "resnet50" or architecture == "resnext50" or architecture == "resnest50" or architecture == "resnext101":
+            backbone_out_features = 2048
+        else:
+            backbone_out_features = 512
+
+        # X, Y coords for the future positions (output shape: batch_sizex50x2)
+        self.future_len = cfg["model_params"]["future_num_frames"]
+        num_targets = 2 * self.future_len
+
+        # You can add more layers here.
+        self.head = nn.Sequential(
+            # nn.Dropout(0.2),
+            nn.Linear(in_features=backbone_out_features, out_features=4096),
+        )
+
+        self.num_preds = num_targets * self.num_modes
+
+        # self.logit = nn.Linear(4096, out_features=self.num_preds + self.num_modes)
+        self.x_preds = nn.Linear(4096, out_features=self.num_preds)
+        self.x_modes = nn.Linear(4096, out_features=self.num_modes)
+
+    def forward(self, x):
+        x = self.backbone.conv1(x)
+        x = self.backbone.bn1(x)
+        x = self.backbone.relu(x)
+        x = self.backbone.maxpool(x)
+
+        x = self.backbone.layer1(x)
+        x = self.backbone.layer2(x)
+        x = self.backbone.layer3(x)
+        x = self.backbone.layer4(x)
+
+        x = self.backbone.avgpool(x)
+        x = torch.flatten(x, 1)
+
+        x = self.head(x)
+        # x = self.logit(x)
+        preds = self.x_preds(x)
+        modes = self.x_modes(x)
+
+        # x = torch.cat((preds, modes), 1)
+
+        # pred (batch_size)x(modes)x(time)x(2D coords)
+        # confidences (batch_size)x(modes)
+        
+        # bs, _ = x.shape
+        # pred, confidences = torch.split(x, self.num_preds, dim=1)
+        # pred = pred.view(bs, self.num_modes, self.future_len, 2)
+        # assert confidences.shape == (bs, self.num_modes)
+        # confidences = torch.softmax(confidences, dim=1)
+        # return pred, confidences
+        return preds, modes
+    
+    # def training_step(self, batch, batch_idx):
+    #     inputs = batch["image"]
+    #     target_availabilities = batch["target_availabilities"]
+    #     targets = batch["target_positions"]
+    #     x = self(inputs)
+    #     bs, _ = x.shape
+    #     pred, confidences = torch.split(x, self.num_preds, dim=1)
+    #     preds = pred.view(bs, self.num_modes, self.future_len, 2)
+    #     assert confidences.shape == (bs, self.num_modes)
+    #     confidences = torch.softmax(confidences, dim=1)
+    #     # Forward pass
+    #     loss = pytorch_neg_multi_log_likelihood_batch(targets, preds, confidences, target_availabilities)
+    #     # return pred, confidences
+    #     return loss
+
+    def training_step(self, batch, batch_idx):
+        inputs = batch["image"]
+        target_availabilities = batch["target_availabilities"]
+        targets = batch["target_positions"]
+        # x = self(inputs)
+        pred, confidences = self(inputs)
+        bs, _ = pred.shape
+        # pred, confidences = torch.split(x, self.num_preds, dim=1)
+        preds = pred.view(bs, self.num_modes, self.future_len, 2)
+        assert confidences.shape == (bs, self.num_modes)
+        confidences = torch.softmax(confidences, dim=1)
+        # Forward pass
+        loss = pytorch_neg_multi_log_likelihood_batch(targets, preds, confidences, target_availabilities)
+        # return pred, confidences
+
+        # train_logs = {
+        #     'loss': loss,
+        # }
+        return loss
+
+    @torch.no_grad()
+    def validation_step(self, batch, batch_idx):
+        inputs = batch["image"]
+        target_availabilities = batch["target_availabilities"]
+        targets = batch["target_positions"]
+        # x = self(inputs)
+        pred, confidences = self(inputs)
+        bs, _ = pred.shape
+        # pred, confidences = torch.split(x, self.num_preds, dim=1)
+        preds = pred.view(bs, self.num_modes, self.future_len, 2)
+        assert confidences.shape == (bs, self.num_modes)
+        confidences = torch.softmax(confidences, dim=1)
+        # Forward pass
+        loss = pytorch_neg_multi_log_likelihood_batch(targets, preds, confidences, target_availabilities)
+        # return pred, confidences
+
+        val_logs = {
+            'val_loss': loss,
+        }
+        return val_logs
+    
+    # def training_epoch_end(self, training_step_outputs):
+    #     avg_loss = torch.mean(torch.tensor([x['loss'] for x in training_step_outputs]))
+    #     self.avg_loss = avg_loss.item()
+        
+
+    def validation_epoch_end(self, validation_step_outputs):
+        avg_val_loss = torch.mean(torch.tensor([x['val_loss'] for x in validation_step_outputs])).item()
+        # avg_loss = self.avg_loss
+
+        # print(f'val_loss: {avg_val_loss}, loss: {avg_loss}')
+        print(f'val_loss: {avg_val_loss}')
+
+        # tensorboard_logs = {'val_loss': avg_val_loss, "loss": avg_loss}
+        tensorboard_logs = {'val_loss': avg_val_loss}
+
+        torch.save(model.state_dict(), f'{os.getcwd()}/result/test/{model_name}/models/save_model_{self.cur_epoch}.pth')
+        self.iterations.append(self.cur_epoch)
+        # self.avg_losses.append(avg_loss)
+        self.avg_val_losses.append(avg_val_loss)
+        self.times.append((time.time()-self.start)/60)
+        self.start = time.time()
+        
+        results = pd.DataFrame({'iterations': self.iterations, 'avg_val_losses': self.avg_val_losses, 'elapsed_time (mins)': self.times})
+        results.to_csv(f"{os.getcwd()}/result/test/{model_name}/results/train_metric{self.cur_epoch}.csv", index = False)
+
+        return {
+            'val_loss': avg_val_loss,
+            # 'loss': avg_loss,
+            'log': tensorboard_logs,
+            # "progress_bar": {"val_loss": tensorboard_logs["val_loss"], "loss": tensorboard_logs["loss"]}
+        }
+
+    
+
+    def configure_optimizers(self):
+        optimizer = AdamP(model.parameters(), lr=self.lr, betas=(0.9, 0.999), weight_decay=1e-2)
+        # optimizer = optim.Adam(model.parameters(), lr=self.lr)
+        # scheduler = optim.lr_scheduler.CosineAnnealingLR(
+        #     optimizer,
+        #     T_max=self.epochs,
+        #     eta_min=1e-5,
+        # )
+        return optimizer
+    
+    def train_dataloader(self):
+        return train_dataloader
+
+    def val_dataloader(self):
+        return val_dataloader
+
+
+# def forward(data, model, device, criterion = pytorch_neg_multi_log_likelihood_batch):
+#     inputs = data["image"].to(device)
+#     target_availabilities = data["target_availabilities"].to(device)
+#     targets = data["target_positions"].to(device)
+#     # Forward pass
+#     preds, confidences = model(inputs)
+#     loss = criterion(targets, preds, confidences, target_availabilities)
+#     return loss, preds, confidences
+
+model_name = cfg["model_params"]["model_name"]
+checkpoint_callback = ModelCheckpoint(
+    filepath=Path(f'{os.getcwd()}/result/test/{model_name}/models'),
+    save_top_k=-1,
+    verbose=True,
+    prefix='pytorch_lightning'
+)
+
+logger = TensorBoardLogger(
+    save_dir=Path(f'{os.getcwd()}/result/test/{model_name}/logs'),
+    version=1,
+    name='lightning_logs'
+)
+
+model = LyftMultiModel()
+
+weight_path = cfg["model_params"]["weight_path"]
+if weight_path:
+    model.load_state_dict(torch.load(weight_path))
+
+trainer = Trainer(max_epochs=3, logger=logger, checkpoint_callback=checkpoint_callback, limit_val_batches=0.2, gpus=[0])
+
+# # Run learning rate finder
+# lr_finder = trainer.tuner.lr_find(model)
+
+# # Results can be found in
+# lr_finder.results
+
+# # Plot with
+# fig = lr_finder.plot(suggest=True)
+# fig.show()
+
+# # Pick point based on plot, or get suggestion
+# new_lr = lr_finder.suggestion()
+# print(f'lr_finder: {lr_finder}')
+# print(f'new_lr: {new_lr}')
+
+# # update hparams of the model
+# model.lr = new_lr
+
+# # Fit model
+# trainer.fit(model)
+trainer.fit(model)
+
+# trainer = Trainer(auto_lr_find=True, gpus=[1])
+# trainer.tune(model)
+
+
+
+
+
+
+
+
+
+
+
 
 
 ########################################################################################################################
@@ -703,456 +973,4 @@ def se_resnext101(num_classes=1000, pretrained='imagenet'):
 # scheduler = lr_scheduler.StepLR(optimizer, step_size=3, gamma=0.1)
 
 ###################################################################################################################################
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-class LyftMultiModel(LightningModule):
-
-    def __init__(self):
-        super().__init__()
-        
-        self.num_modes = 3
-        self.cur_epoch = 1
-        self.start = time.time()
-        self.iterations = []
-        self.avg_losses = []
-        self.avg_val_losses = []
-        self.times = []
-        self.avg_loss = 0.0
-        model_name = cfg["model_params"]["model_name"]
-        try:
-            os.mkdir(f'./result')
-        except:
-            pass
-        try:
-            os.mkdir(f'./result/test')
-        except:
-            pass
-        try:
-            os.mkdir(f'./result/test/{model_name}')
-        except:
-            pass
-        try:
-            os.mkdir(f'./result/test/{model_name}/results')
-        except:
-            pass
-        try:
-            os.mkdir(f'./result/test/{model_name}/models')
-        except:
-            pass
-        try:
-            os.mkdir(f'./result/test/{model_name}/logs')
-        except:
-            print(f'{model_name} folder is already exgist!')
-
-
-        architecture = cfg["model_params"]["model_architecture"]
-        backbone = eval(architecture)(pretrained=True, progress=True)
-        # backbone = torch.hub.load('pytorch/vision:v0.6.0', 'resnext101_32x8d', pretrained=True)
-        # backbone = torch.hub.load('zhanghang1989/ResNeSt', 'resnest50', pretrained=True)
-        
-        print(backbone)
-        self.backbone = backbone
-
-        num_history_channels = (cfg["model_params"]["history_num_frames"] + 1) * 2
-        num_in_channels = 3 + num_history_channels
-        
-        # num_in_channels *= 2
-
-        self.backbone.conv1 = nn.Conv2d(
-            num_in_channels,
-            self.backbone.conv1.out_channels,
-            kernel_size=self.backbone.conv1.kernel_size,
-            stride=self.backbone.conv1.stride,
-            padding=self.backbone.conv1.padding,
-            bias=False,
-        )
-        # self.backbone.conv1[0] = nn.Conv2d(
-        #     num_in_channels,
-        #     self.backbone.conv1[0].out_channels,
-        #     kernel_size=self.backbone.conv1[0].kernel_size,
-        #     stride=self.backbone.conv1[0].stride,
-        #     padding=self.backbone.conv1[0].padding,
-        #     bias=False,
-        # )
-
-        # This is 512 for resnet18 and resnet34;
-        # And it is 2048 for the other resnets
-        
-        if architecture == "resnet50" or architecture == "resnext50" or architecture == "resnest50" or architecture == "resnext101":
-            backbone_out_features = 2048
-        else:
-            backbone_out_features = 512
-
-        # X, Y coords for the future positions (output shape: batch_sizex50x2)
-        self.future_len = cfg["model_params"]["future_num_frames"]
-        num_targets = 2 * self.future_len
-
-        # You can add more layers here.
-        self.head = nn.Sequential(
-            # nn.Dropout(0.2),
-            nn.Linear(in_features=backbone_out_features, out_features=4096),
-        )
-
-        self.num_preds = num_targets * self.num_modes
-
-        self.logit = nn.Linear(4096, out_features=self.num_preds + self.num_modes)
-
-    def forward(self, x):
-        x = self.backbone.conv1(x)
-        x = self.backbone.bn1(x)
-        x = self.backbone.relu(x)
-        x = self.backbone.maxpool(x)
-
-        x = self.backbone.layer1(x)
-        x = self.backbone.layer2(x)
-        x = self.backbone.layer3(x)
-        x = self.backbone.layer4(x)
-
-        x = self.backbone.avgpool(x)
-        x = torch.flatten(x, 1)
-
-        x = self.head(x)
-        x = self.logit(x)
-
-        # pred (batch_size)x(modes)x(time)x(2D coords)
-        # confidences (batch_size)x(modes)
-        
-        # bs, _ = x.shape
-        # pred, confidences = torch.split(x, self.num_preds, dim=1)
-        # pred = pred.view(bs, self.num_modes, self.future_len, 2)
-        # assert confidences.shape == (bs, self.num_modes)
-        # confidences = torch.softmax(confidences, dim=1)
-        # return pred, confidences
-        return x
-    
-    def training_step(self, batch, batch_idx):
-        inputs = batch["image"]
-        target_availabilities = batch["target_availabilities"]
-        targets = batch["target_positions"]
-        x = self(inputs)
-        bs, _ = x.shape
-        pred, confidences = torch.split(x, self.num_preds, dim=1)
-        preds = pred.view(bs, self.num_modes, self.future_len, 2)
-        assert confidences.shape == (bs, self.num_modes)
-        confidences = torch.softmax(confidences, dim=1)
-        # Forward pass
-        loss = pytorch_neg_multi_log_likelihood_batch(targets, preds, confidences, target_availabilities)
-        # return pred, confidences
-        return loss
-
-    def training_step(self, batch, batch_idx):
-        inputs = batch["image"]
-        target_availabilities = batch["target_availabilities"]
-        targets = batch["target_positions"]
-        x = self(inputs)
-        bs, _ = x.shape
-        pred, confidences = torch.split(x, self.num_preds, dim=1)
-        preds = pred.view(bs, self.num_modes, self.future_len, 2)
-        assert confidences.shape == (bs, self.num_modes)
-        confidences = torch.softmax(confidences, dim=1)
-        # Forward pass
-        loss = pytorch_neg_multi_log_likelihood_batch(targets, preds, confidences, target_availabilities)
-        # return pred, confidences
-        return train_logs = {
-            'loss': loss,
-        }
-
-    @torch.no_grad()
-    def validation_step(self, batch, batch_idx):
-        inputs = batch["image"]
-        target_availabilities = batch["target_availabilities"]
-        targets = batch["target_positions"]
-        x = self(inputs)
-        bs, _ = x.shape
-        pred, confidences = torch.split(x, self.num_preds, dim=1)
-        preds = pred.view(bs, self.num_modes, self.future_len, 2)
-        assert confidences.shape == (bs, self.num_modes)
-        confidences = torch.softmax(confidences, dim=1)
-        # Forward pass
-        loss = pytorch_neg_multi_log_likelihood_batch(targets, preds, confidences, target_availabilities)
-        # return pred, confidences
-        
-        return val_logs = {
-            'val_loss': loss,
-        }
-    
-    def training_epoch_end(self, training_step_outputs):
-        avg_loss = torch.mean(torch.tensor([x['loss'] for x in training_step_outputs]))
-        self.avg_loss = avg_loss
-        
-
-    def validation_epoch_end(self, validation_step_outputs):
-        avg_val_loss = torch.mean(torch.tensor([x['val_loss'] for x in validation_step_outputs]))
-        avg_loss = self.avg_loss
-        
-        tensorboard_logs = {'val_loss': avg_val_loss, "loss": avg_loss}
-
-        torch.save(model.state_dict(), f'{os.getcwd()}/result/test/{model_name}/models/sava_model_{self.cur_epoch}.pth')
-        self.iterations.append(self.cur_epoch)
-        self.avg_losses.append(avg_loss)
-        self.avg_val_losses.append(avg_val_loss)
-        self.times.append((time.time()-self.start)/60)
-        self.start = time.time()
-        
-        results = pd.DataFrame({'iterations': self.iterations, 'avg_losses': self.avg_losses, 'avg_val_losses': self.avg_val_losses, 'elapsed_time (mins)': self.times})
-        results.to_csv(f"{os.getcwd()}/result/test/{model_name}/results/train_metric{self.cur_epoch}.csv", index = False)
-
-        torch.cuda.empty_cache()
-        gc.collect()
-
-        return {
-            'val_loss': avg_val_loss,
-            'loss': avg_loss,
-            'log': tensorboard_logs,
-            "progress_bar": {"val_loss": tensorboard_logs["val_loss"], "loss": tensorboard_logs["loss"]}
-        }
-
-    
-
-    def configure_optimizers(self):
-        optimizer = AdamP(model.parameters(), lr=cfg["model_params"]["lr"], betas=(0.9, 0.999), weight_decay=1e-2)
-        # scheduler = optim.lr_scheduler.CosineAnnealingLR(
-        #     optimizer,
-        #     T_max=self.epochs,
-        #     eta_min=1e-5,
-        # )
-        return optimizer
-    
-    def train_dataloader(self):
-        return train_dataloader
-
-    def val_dataloader(self):
-        return val_dataloader
-
-
-# def forward(data, model, device, criterion = pytorch_neg_multi_log_likelihood_batch):
-#     inputs = data["image"].to(device)
-#     target_availabilities = data["target_availabilities"].to(device)
-#     targets = data["target_positions"].to(device)
-#     # Forward pass
-#     preds, confidences = model(inputs)
-#     loss = criterion(targets, preds, confidences, target_availabilities)
-#     return loss, preds, confidences
-
-model_name = cfg["model_params"]["model_name"]
-checkpoint_callback = ModelCheckpoint(
-    filepath=f'os.getcwd()/result/test/{model_name}/models',
-    save_top_k=-1,
-    verbose=True,
-    prefix='pytorch_lightning'
-)
-
-logger = TensorBoardLogger(
-    save_dir=f'os.getcwd()/result/test/{model_name}/logs',
-    version=1,
-    name='lightning_logs'
-)
-
-model = LyftMultiModel()
-
-trainer = Trainer(max_epochs=5, logger=logger, checkpoint_callback=checkpoint_callback, limit_val_batches=0.2, gpus=[0])
-
-# Run learning rate finder
-lr_finder = trainer.tuner.lr_find(model)
-
-# Results can be found in
-lr_finder.results
-
-# Plot with
-fig = lr_finder.plot(suggest=True)
-fig.show()
-
-# Pick point based on plot, or get suggestion
-new_lr = lr_finder.suggestion()
-
-# update hparams of the model
-model.hparams.lr = new_lr
-
-# Fit model
-# trainer.fit(model)
-trainer.fit(model)
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-# Now let us initialize the model and load the pretrained weights. Note that since the pretrained model was trained on GPU, you also need to enable GPU when running this notebook.
-
-
-# ==== INIT MODEL=================
-# device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-# model = LyftMultiModel(cfg)
-
-# #load weight if there is a pretrained model
-# weight_path = cfg["model_params"]["weight_path"]
-# if weight_path:
-#     model.load_state_dict(torch.load(weight_path))
-
-# model.to(device)
-# # optimizer = optim.Adam(model.parameters(), lr=cfg["model_params"]["lr"])
-# # optimizer = AdamP(model.parameters(), lr=cfg["model_params"]["lr"], betas=(0.9, 0.999), weight_decay=1e-2)
-# print(f'device {device}')
-
-
-# print(model)
-
-# ## Training loop
-
-# Next let us implement the training loop, when the **train** parameter is set to True. 
-
-
-# ==== TRAINING LOOP =========================================================
-# if cfg["model_params"]["train"]:
-    
-    # num_iter = cfg["train_params"]["max_num_steps"]
-    # model_name = cfg["model_params"]["model_name"]
-    # try:
-    #     os.mkdir(f'./result')
-    # except:
-    #     pass
-    # try:
-    #     os.mkdir(f'./result/test')
-    # except:
-    #     pass
-    # try:
-    #     os.mkdir(f'./result/test/{model_name}')
-    # except:
-    #     print(f'{model_name} folder is already exgist!')
-
-    # max_epoch = 10
-    # for epoch in range(max_epoch + 1):
-    #     tr_it = iter(train_dataloader)
-    #     progress_bar = tqdm(range(len(tr_it)))
-        
-    #     losses_train = []
-    #     iterations = []
-    #     metrics = []
-    #     times = []
-        
-    #     start = time.time()
-
-    #     for i in progress_bar:
-    #         data = next(tr_it)
-    #         model.train()
-    #         torch.set_grad_enabled(True)
-            
-    #         loss, _, _ = forward(data, model, device)
-
-    #         # Backward pass
-    #         optimizer.zero_grad()
-    #         loss.backward()
-    #         optimizer.step()
-
-    #         losses_train.append(loss.item())
-
-    #         progress_bar.set_description(f"epoch: {epoch} loss: {loss.item()} loss(avg): {np.mean(losses_train)}")
-    #         # if i % cfg['train_params']['checkpoint_every_n_steps'] == 0:
-    #         #     torch.save(model.state_dict(), f'{model_name}_{i}.pth')
-    #         #     iterations.append(i)
-    #         #     metrics.append(np.mean(losses_train))
-    #         #     times.append((time.time()-start)/60)
-
-    #     torch.save(model.state_dict(), f'./result/test/{model_name}/{epoch}.pth')
-    #     iterations.append(epoch)
-    #     metrics.append(np.mean(losses_train))
-    #     times.append((time.time()-start)/60)
-        
-    #     results = pd.DataFrame({'iterations': iterations, 'metrics (avg)': metrics, 'elapsed_time (mins)': times})
-    #     results.to_csv(f"./result/test/{model_name}/train_metric{epoch}.csv", index = False)
-    #     print(f"Total training time is {(time.time()-start)/60} mins")
-    #     print(results.head())
-
-# ## Prediction
-
-# Finally we implement the inference to submit to Kaggle when **predict** param is set to True.
-
-
-# ==== EVAL LOOP ================================================================
-# if cfg["model_params"]["predict"]:
-    
-#     model.eval()
-#     torch.set_grad_enabled(False)
-
-#     # store information for evaluation
-#     future_coords_offsets_pd = []
-#     timestamps = []
-#     confidences_list = []
-#     agent_ids = []
-
-#     progress_bar = tqdm(test_dataloader)
-    
-#     for data in progress_bar:
-        
-#         _, preds, confidences = forward(data, model, device)
-    
-#         #fix for the new environment
-#         preds = preds.cpu().numpy()
-#         world_from_agents = data["world_from_agent"].numpy()
-#         centroids = data["centroid"].numpy()
-#         coords_offset = []
-        
-#         # convert into world coordinates and compute offsets
-#         for idx in range(len(preds)):
-#             for mode in range(3):
-#                 preds[idx, mode, :, :] = transform_points(preds[idx, mode, :, :], world_from_agents[idx]) - centroids[idx][:2]
-    
-#         future_coords_offsets_pd.append(preds.copy())
-#         confidences_list.append(confidences.cpu().numpy().copy())
-#         timestamps.append(data["timestamp"].numpy().copy())
-#         agent_ids.append(data["track_id"].numpy().copy()) 
-
-
-# #create submission to submit to Kaggle
-# pred_path = 'submission.csv'
-# write_pred_csv(pred_path,
-#            timestamps=np.concatenate(timestamps),
-#            track_ids=np.concatenate(agent_ids),
-#            coords=np.concatenate(future_coords_offsets_pd),
-#            confs = np.concatenate(confidences_list)
-#           )
-
 
