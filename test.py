@@ -1,4 +1,4 @@
-from __future__ import print_function, division, absolute_import
+# from __future__ import print_function, division, absolute_import
 from typing import Dict
 
 from tempfile import gettempdir
@@ -43,6 +43,8 @@ from pytorch_lightning.callbacks import ModelCheckpoint
 from pytorch_lightning.loggers import TensorBoardLogger
 import gc
 
+from efficientnet_pytorch import  EfficientNet
+
 import warnings
 warnings.filterwarnings("ignore")
 
@@ -75,7 +77,7 @@ cfg = {
         'future_num_frames': 50,
         'future_step_size': 1,
         'future_delta_time': 0.1,
-        'model_name': "eachstackingmodel+267+adamp+0.2+10+1e-4+separate_modes+threshold_0.0",
+        'model_name': "resnet18+267+adamp+0.2+10+1e-4+separate_modes_hard+threshold_0.5",
         # 'model_name': "lr_finder_test",
         'lr': 1e-4,
         # 'weight_path': "./result/test/resnet18+267+adamp+0.5+10_history_num_frames/models/save_model_1.pth",
@@ -93,14 +95,14 @@ cfg = {
         'satellite_map_key': 'aerial_map/aerial_map.png',
         'semantic_map_key': 'semantic_map/semantic_map.pb',
         'dataset_meta_key': 'meta.json',
-        'filter_agents_threshold': 0.0,
+        'filter_agents_threshold': 0.5,
         'disable_traffic_light_faces': False
         
     },
 
     'train_data_loader': {
         'key': 'scenes/sample.zarr',
-        'batch_size': 4,
+        'batch_size': 8,
         'shuffle': True,
         'num_workers': 8
     },
@@ -316,7 +318,7 @@ class ResNet(nn.Module):
         super(ResNet, self).__init__()
         assert kernel_size % 2 == 1
         self.conv1 = nn.Sequential(
-            nn.Conv2d(
+            nn.Conv1d(
                 in_features,
                 out_features,
                 kernel_size,
@@ -328,7 +330,7 @@ class ResNet(nn.Module):
             nn.Dropout(dropout),
         )
         self.conv2 = nn.Sequential(
-            nn.Conv2d(
+            nn.Conv1d(
                 out_features,
                 out_features,
                 kernel_size,
@@ -344,6 +346,29 @@ class ResNet(nn.Module):
         x = self.conv1(x)
         out = self.conv2(x) + x
         return out
+
+
+class PositionalEncoding(nn.Module):
+    def __init__(self, d_model, dropout=0.1, max_len=201):
+        super(PositionalEncoding, self).__init__()
+        self.dropout = nn.Dropout(p=dropout)
+
+        pe = torch.zeros(max_len, d_model)
+        position = torch.arange(0, max_len, dtype=torch.float).unsqueeze(1)
+        div_term = torch.exp(
+            torch.arange(0, d_model, 2).float() * (-math.log(10000.0) / d_model)
+        )
+        pe[:, 0::2] = torch.sin(position * div_term)
+        if d_model % 2 == 0:
+            pe[:, 1::2] = torch.cos(position * div_term)
+        else:
+            pe[:, 1::2] = torch.cos(position * div_term)[:, : d_model // 2]
+        pe = pe.unsqueeze(0).transpose(0, 1)
+        self.register_buffer("pe", pe)
+
+    def forward(self, x):
+        x = x + self.pe[: x.size(0), :]
+        return self.dropout(x)
 
 
 class LyftMultiModel(LightningModule):
@@ -401,10 +426,15 @@ class LyftMultiModel(LightningModule):
 
         architecture = cfg["model_params"]["model_architecture"]
         backbone = eval(architecture)(pretrained=True, progress=True)
-        # backbone = torch.hub.load('pytorch/vision:v0.6.0', 'resnext101_32x8d', pretrained=True)
+        # backbone = torch.hub.load('pytorch/vision:v0.6.0', 'resnext50_32x4d', pretrained=True)
         # backbone = torch.hub.load('zhanghang1989/ResNeSt', 'resnest50', pretrained=True)
+        # backbone = torch.hub.load('narumiruna/efficientnet-pytorch', 'efficientnet_b0', pretrained=True)
         
         # print(backbone)
+        
+
+        if architecture == 'efficientnet':
+            backbone.features = backbone.features[:17]
         self.backbone = backbone
 
         num_history_channels = (cfg["model_params"]["history_num_frames"] + 1) * 2
@@ -413,13 +443,22 @@ class LyftMultiModel(LightningModule):
         # num_in_channels *= 2
 
 
-        if architecture == "resnest50" or architecture == "resnest101":
+        if architecture == "resnest50" or architecture == "resnest18" or architecture == "resnest101":
             self.backbone.conv1[0] = nn.Conv2d(
                 num_in_channels,
                 self.backbone.conv1[0].out_channels,
                 kernel_size=self.backbone.conv1[0].kernel_size,
                 stride=self.backbone.conv1[0].stride,
                 padding=self.backbone.conv1[0].padding,
+                bias=False,
+            )
+        elif architecture == 'efficientnet':
+            self.backbone.features[0][1] = nn.Conv2d(
+                num_in_channels,
+                self.backbone.features[0][1].out_channels,
+                kernel_size=self.backbone.features[0][1].kernel_size,
+                stride=self.backbone.features[0][1].stride,
+                padding=self.backbone.features[0][1].padding,
                 bias=False,
             )
         else:
@@ -437,8 +476,10 @@ class LyftMultiModel(LightningModule):
         # This is 512 for resnet18 and resnet34;
         # And it is 2048 for the other resnets
         
-        if architecture == "resnet50" or architecture == "resnext50" or architecture == "resnest50" or architecture == "resnext101":
+        if architecture == "resnet50" or architecture == "resnext50" or architecture == "resnest50" or architecture == "resnest18" or architecture == "resnext101":
             backbone_out_features = 2048
+        elif architecture == 'efficientnet':
+            backbone_out_features = 320
         else:
             backbone_out_features = 512
 
@@ -448,12 +489,12 @@ class LyftMultiModel(LightningModule):
 
 
         # backbone_out_features = 256 + 128 + 64 + 32
-        backbone_out_features = 256 + 128 + 64 + 32 + 16
+        out_features = 256 + 128 + 64 + 32 + 16
         # You can add more layers here.
-        self.head = nn.Sequential(
-            # nn.Dropout(0.2),
-            nn.Linear(in_features=backbone_out_features, out_features=4096),
-        )
+        # self.head = nn.Sequential(
+        #     # nn.Dropout(0.2),
+        #     nn.Linear(in_features=out_features, out_features=4096),
+        # )
 
         self.num_preds = num_targets * self.num_modes
 
@@ -461,7 +502,78 @@ class LyftMultiModel(LightningModule):
         self.x_preds = nn.Linear(4096, out_features=self.num_preds)
         self.x_modes = nn.Linear(4096, out_features=self.num_modes)
 
+        self.pool2d = nn.AdaptiveAvgPool2d((1,1))
+
+
         dropout_rate = 0.2
+
+        self.rnn1 = nn.LSTM(
+            512,
+            512,
+            num_layers=2,
+            batch_first=True,
+            bidirectional=True,
+        )
+        self.deconv1 = nn.ConvTranspose1d(
+            1024, 512, kernel_size=3, stride=2, padding=1
+        )
+        self.rnn2 = nn.LSTM(
+            1024,
+            512,
+            num_layers=2,
+            batch_first=True,
+            bidirectional=True,
+        )
+        self.deconv2 = nn.ConvTranspose1d(
+            1024, 512, kernel_size=3, stride=2, padding=1
+        )
+        out_features = 1024 
+        
+        self.pool = nn.AdaptiveAvgPool2d((3,3))
+        self.pool2 = nn.AdaptiveAvgPool2d((32,64))
+        self.pool3d = nn.AdaptiveAvgPool3d((1,512,1))
+
+        self.head = nn.Sequential(
+            # nn.Dropout(0.2),
+            nn.Linear(in_features=2048, out_features=4096),
+        )
+
+        self.linear = nn.Linear(512, 2048)
+        self.scale = math.sqrt(2048)
+        self.pe = PositionalEncoding(2048, dropout_rate)
+        encoder_layer1 = nn.TransformerEncoderLayer(
+            2048,
+            nhead=8,
+            dim_feedforward=1024,
+            dropout=dropout_rate,
+            activation="gelu",
+        )
+        self.transformer1 = nn.TransformerEncoder(encoder_layer1, 1)
+        self.deconv1 = nn.ConvTranspose1d(
+            2048, 1024, kernel_size=3, stride=2, padding=1
+        )
+        encoder_layer2 = nn.TransformerEncoderLayer(
+            1024,
+            nhead=8,
+            dim_feedforward=1024,
+            dropout=dropout_rate,
+            activation="gelu",
+        )
+        self.transformer2 = nn.TransformerEncoder(encoder_layer2, 1)
+        self.deconv2 = nn.ConvTranspose1d(
+            2048, 1024, kernel_size=3, stride=2, padding=1
+        )
+        out_features = 2048
+
+        self.rnn = nn.LSTM(
+            out_features,
+            512,
+            num_layers=2,
+            batch_first=True,
+            bidirectional=True,
+        )
+        out_features = 1024
+
         # self.resnet1 = ResNet(
         #     num_in_channels, 512, kernel_size=3, dropout=dropout_rate
         # )
@@ -493,66 +605,96 @@ class LyftMultiModel(LightningModule):
         #     32, 32, kernel_size=3, stride=2, padding=1
         # )
 
-        self.resnet1 = ResNet(
-            num_in_channels, 256, kernel_size=3, dropout=dropout_rate
-        )
-        self.resnet2 = ResNet(
-            num_in_channels, 128, kernel_size=3, dropout=dropout_rate
-        )
-        self.resnet3 = ResNet(
-            num_in_channels, 64, kernel_size=3, dropout=dropout_rate
-        )
-        self.resnet4 = ResNet(
-            num_in_channels, 32, kernel_size=3, dropout=dropout_rate
-        )
-        self.resnet5 = ResNet(
-            num_in_channels, 16, kernel_size=3, dropout=dropout_rate
-        )
+        # self.resnet1 = ResNet(
+        #     backbone_out_features, 256, kernel_size=3, dropout=dropout_rate
+        # )
+        # self.resnet2 = ResNet(
+        #     backbone_out_features, 128, kernel_size=3, dropout=dropout_rate
+        # )
+        # self.resnet3 = ResNet(
+        #     backbone_out_features, 64, kernel_size=3, dropout=dropout_rate
+        # )
+        # self.resnet4 = ResNet(
+        #     backbone_out_features, 32, kernel_size=3, dropout=dropout_rate
+        # )
+        # self.resnet5 = ResNet(
+        #     backbone_out_features, 16, kernel_size=3, dropout=dropout_rate
+        # )
         
         
 
     def forward(self, x):
-        outs = []
-        # for i in range(2, 6):
-        #     # print("#########################", i)
-        #     x = getattr(self, f"resnet{i}")(x)
-        #     out = getattr(self, f"deconv{i}")(x)
-        #     outs.append(out)
-        for i in range(1, 6):
-            out = getattr(self, f"resnet{i}")(x)
-            outs.append(out)
-        
-        x = torch.cat(outs, dim=1)
-        # x = self.backbone.conv1(x)
-        # x = self.backbone.bn1(x)
-        # x = self.backbone.relu(x)
-        # x = self.backbone.maxpool(x)
 
-        # x = self.backbone.layer1(x)
-        # x = self.backbone.layer2(x)
-        # x = self.backbone.layer3(x)
-        # x = self.backbone.layer4(x)
+
+        x = self.backbone.conv1(x)
+        x = self.backbone.bn1(x)
+        x = self.backbone.relu(x)
+        x = self.backbone.maxpool(x)
+
+        x = self.backbone.layer1(x)
+        x = self.backbone.layer2(x)
+        x = self.backbone.layer3(x)
+        x = self.backbone.layer4(x)
+
+        # x = self.backbone.features(x)
+        
+        # print("################", x.shape)
+        # outs = []
+        # # for i in range(2, 6):
+        # #     # print("#########################", i)
+        # #     x = getattr(self, f"resnet{i}")(x)
+        # #     out = getattr(self, f"deconv{i}")(x)
+        # #     outs.append(out)
+        # for i in range(1, 6):
+        #     out = getattr(self, f"resnet{i}")(x)
+        #     outs.append(out)
+        # x = torch.cat(outs, dim=1)
 
         x = self.backbone.avgpool(x)
         x = torch.flatten(x, 1)
 
+        # # print("################", x.shape)
+        # x = self.pool3d(x)
+        # x = torch.flatten(x, 2)
+
+        # # print("################", x.shape)
+        # outs = []
+        # x, _ = self.rnn1(x)
+        # out = self.deconv1(x.permute(0, 2, 1)).permute(0, 2, 1)
+        # outs.append(out)
+        # x, _ = self.rnn2(x)
+        # out = self.deconv2(x.permute(0, 2, 1)).permute(0, 2, 1)
+        # outs.append(out)
+        # x = torch.cat(outs, dim=-1)
+        
+        # # print("################", x.shape)
+        
+
+        # # print("################", x.shape)
+        # x = self.pool2(x)
+        # x = torch.flatten(x, 1)
+        # # print("################", x.shape)
+        # print("################", x.shape)
+        # x = torch.relu(self.linear(x))
+        # x = self.pe(x.permute(1, 0, 2))
+        # outs = []
+        # x = self.transformer1(x)
+        # out = self.deconv1(x.permute(1, 2, 0)).permute(2, 0, 1)
+        # outs.append(out)
+        # x = self.transformer1(x)
+        # out = self.deconv2(x.permute(1, 2, 0)).permute(2, 0, 1)
+        # outs.append(out)
+        # x = torch.cat(outs, dim=-1).permute(1, 0, 2)
+        # # print("################", x.shape)
+        # x = self.pool2(x)
+        # x = torch.flatten(x, 1)
+        # # print("################", x.shape)
         x = self.head(x)
         # x = self.logit(x)
         
         preds = self.x_preds(x)
         modes = self.x_modes(x)
 
-        # x = torch.cat((preds, modes), 1)
-
-        # pred (batch_size)x(modes)x(time)x(2D coords)
-        # confidences (batch_size)x(modes)
-        
-        # bs, _ = x.shape
-        # pred, confidences = torch.split(x, self.num_preds, dim=1)
-        # pred = pred.view(bs, self.num_modes, self.future_len, 2)
-        # assert confidences.shape == (bs, self.num_modes)
-        # confidences = torch.softmax(confidences, dim=1)
-        # return pred, confidences
         return preds, modes
     
     # def training_step(self, batch, batch_idx):
@@ -691,7 +833,7 @@ weight_path = cfg["model_params"]["weight_path"]
 if weight_path:
     model.load_state_dict(torch.load(weight_path))
 
-trainer = Trainer(max_epochs=3, logger=logger, checkpoint_callback=checkpoint_callback, limit_val_batches=0.2, gpus=[1])
+trainer = Trainer(max_epochs=5, logger=logger, checkpoint_callback=checkpoint_callback, limit_val_batches=0.2, gpus=[0])
 
 # # Run learning rate finder
 # lr_finder = trainer.tuner.lr_find(model)
@@ -1070,4 +1212,11 @@ def se_resnext101(num_classes=1000, pretrained='imagenet'):
 # scheduler = lr_scheduler.StepLR(optimizer, step_size=3, gamma=0.1)
 
 ###################################################################################################################################
+
+
+
+
+
+
+
 
