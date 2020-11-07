@@ -75,7 +75,7 @@ cfg = {
         'future_num_frames': 50,
         'future_step_size': 1,
         'future_delta_time': 0.1,
-        'model_name': "train_resnest50+267+adamp+0.5+15+1e-4+threshold_0.5+yaws_256+256_linear",
+        'model_name': "resnet50+267+adamp+0.2+10+1e-4+separate_modes_hard+threshold_0.5+3dpool_(yaw+poisition)_cnn_repaire_remove_reakyRelu",
         # 'model_name': "test...",
         # 'model_name': "lr_finder_train",
         'lr': 1e-4,
@@ -101,7 +101,7 @@ cfg = {
         'key': 'scenes/sample.zarr',
         'batch_size': 8,
         'shuffle': True,
-        'num_workers': 8
+        'num_workers': 4
     },
     
     'test_data_loader': {
@@ -278,12 +278,45 @@ def pytorch_neg_multi_log_likelihood_single(
 
 
 
+class ResNet(nn.Module):
+    def __init__(self, in_features, out_features, kernel_size, dropout=0.0):
+        super(ResNet, self).__init__()
+        assert kernel_size % 2 == 1
 
+        self.conv1 = nn.Sequential(
+            nn.Conv1d(
+                in_features,
+                out_features,
+                kernel_size,
+                stride=1,
+                padding=(kernel_size - 1) // 2,
+            ),
+            nn.BatchNorm1d(out_features),
+            # nn.LeakyReLU(inplace=True),
+            nn.Dropout(dropout),
+        )
+        self.conv2 = nn.Sequential(
+            nn.Conv1d(
+                out_features,
+                out_features,
+                kernel_size,
+                stride=1,
+                padding=(kernel_size - 1) // 2,
+            ),
+            nn.BatchNorm1d(out_features),
+            # nn.LeakyReLU(inplace=True),
+            nn.Dropout(dropout),
+        )
+
+    def forward(self, x):
+        x = self.conv1(x)
+        out = self.conv2(x) + x
+        return out
 
 
 class LyftMultiModel(LightningModule):
 
-    def __init__(self):
+    def __init__(self, device_version):
         super().__init__()
         
         self.lr = cfg["model_params"]["lr"]
@@ -296,6 +329,9 @@ class LyftMultiModel(LightningModule):
         self.times = []
         self.avg_loss = 0.0
         self.step = 0
+        self.my_device = torch.device(f'cuda:{device_version}')
+        self.previous_postiion_x = torch.tensor(train_dataset[0]["history_positions"][0, 0], dtype=torch.float32, device=self.my_device)
+        self.previous_postiion_y = torch.tensor(train_dataset[0]["history_positions"][0, 1], dtype=torch.float32, device=self.my_device)
         model_name = cfg["model_params"]["model_name"]
 
         # self.save_hyperparameters(
@@ -383,66 +419,136 @@ class LyftMultiModel(LightningModule):
         num_targets = 2 * self.future_len
 
         # You can add more layers here.
-        self.head = nn.Sequential(
-            # nn.Dropout(0.2),
-            nn.Linear(in_features=backbone_out_features, out_features=4096),
-        )
+        # self.head = nn.Sequential(
+        #     # nn.Dropout(0.2),
+        #     nn.Linear(in_features=backbone_out_features, out_features=4096),
+        # )
         
-        self.yaw_head = nn.Sequential(
-            # nn.Dropout(0.2),
-            nn.Linear(in_features=11, out_features=64),
-            nn.Linear(in_features=64, out_features=128),
-            nn.Linear(in_features=128, out_features=256)
-        )
+        # self.history_set_head = nn.Sequential(
+        #     nn.Linear(in_features = 33, out_features = 64),
+        #     nn.Linear(in_features=64, out_features=64),
+        # )
 
-        self.position_head = nn.Sequential(
-            # nn.Dropout(0.2),
-            nn.Linear(in_features=22, out_features=64),
-            nn.Linear(in_features=64, out_features=128),
-            nn.Linear(in_features=128, out_features=256)
-        )
+        # self.yaw_head = nn.Sequential(
+        #     # nn.Dropout(0.2),
+        #     nn.Linear(in_features=11, out_features=64),
+        #     nn.Linear(in_features=64, out_features=128),
+        #     nn.Linear(in_features=128, out_features=256)
+        # )
+
+        # self.position_head = nn.Sequential(
+        #     # nn.Dropout(0.2),
+        #     nn.Linear(in_features=22, out_features=64),
+        #     nn.Linear(in_features=64, out_features=128),
+        #     nn.Linear(in_features=128, out_features=256)
+        # )
+
+        # self.pool2d = nn.AdaptiveMaxPool2d((128, 8))
+        # self.pool3d = nn.AdaptiveMaxPool3d((11, 128, 1))
+        # self.reduction_layer = nn.Sequential(
+        #     nn.Linear(in_features=backbone_out_features, out_features=1024),
+        #     nn.Linear(in_features=1024, out_features=512)
+        # )
 
         self.parend_head = nn.Sequential(
             # nn.Dropout(0.2),
-            nn.Linear(in_features=backbone_out_features+256+256, out_features=4096),
+            nn.Linear(in_features=2048+44, out_features=4000),
 
         )
+
+        self.batchNorm = nn.BatchNorm1d(99)
+        # self.dropOut = nn.Dropout(0.2)
+
+        # 256 + 128 + 64 + 32
 
         self.num_preds = num_targets * self.num_modes
 
 
-        self.x_preds = nn.Linear(4096, out_features=self.num_preds)
-        self.x_modes = nn.Linear(4096, out_features=self.num_modes)
+        self.x_preds = nn.Linear(99*64, out_features=self.num_preds)
+        self.x_modes = nn.Linear(99*64, out_features=self.num_modes)
 
         num_feature = 3
         
         #################################################################
-        self.yaws_rnn1 = nn.LSTM(
-            1,
-            128,
+        # self.yaws_rnn1 = nn.LSTM(
+        #     1,
+        #     4,
+        #     num_layers=2,
+        #     batch_first=True,
+        #     bidirectional=True,
+        # )
+        # self.positions_rnn1 = nn.LSTM(
+        #     2,
+        #     4,
+        #     num_layers=2,
+        #     batch_first=True,
+        #     bidirectional=True,
+        # )
+        self.rnn1 = nn.LSTM(
+            80,
+            32,
             num_layers=2,
             batch_first=True,
             bidirectional=True,
         )
-        self.yaws_deconv1 = nn.ConvTranspose1d(
-            256, 128, kernel_size=3, stride=2, padding=1
+        self.deconv1 = nn.ConvTranspose1d(
+            64, 32, kernel_size=3, stride=2, padding=1
         )
-        self.yaws_rnn2 = nn.LSTM(
-            256,
-            128,
+        self.rnn2 = nn.LSTM(
+            64,
+            32,
             num_layers=2,
             batch_first=True,
             bidirectional=True,
         )
-        self.yaws_deconv2 = nn.ConvTranspose1d(
-            256, 128, kernel_size=3, stride=2, padding=1
+        self.deconv2 = nn.ConvTranspose1d(
+            64, 32, kernel_size=3, stride=2, padding=1
         )
-        out_features = 256
+        # out_features = 8
+
+
+
+        
+        # self.resnet1 = ResNet(
+        #     128+3, 256, kernel_size=5, dropout=0.2
+        # )
+        # self.deconv1 = nn.ConvTranspose1d(
+        #     256, 256, kernel_size=3, stride=2, padding=1
+        # )
+        # self.resnet2 = ResNet(
+        #     256, 128, kernel_size=7, dropout=0.2
+        # )
+        # self.deconv2 = nn.ConvTranspose1d(
+        #     128, 128, kernel_size=3, stride=2, padding=1
+        # )
+        # self.resnet1 = ResNet(
+        #     128+3, 64, kernel_size=9, dropout=0.2
+        # )
+        # self.deconv1 = nn.ConvTranspose1d(
+        #     64, 64, kernel_size=3, stride=2, padding=1
+        # )
+        # self.resnet2 = ResNet(
+        #     64, 32, kernel_size=11, dropout=0.2
+        # )
+        # self.deconv2 = nn.ConvTranspose1d(
+        #     32, 32, kernel_size=3, stride=2, padding=1
+        # )
+        # out_features = 64 + 32
+
+        # self.rnn = nn.LSTM(
+        #     80,
+        #     32,
+        #     num_layers=2,
+        #     batch_first=True,
+        #     bidirectional=True,
+        # )
+
+        # out_features = 256
         #################################################################
 
         #################################################################
 
-    def forward(self, images, history_yaws = [], history_position = []):
+    def forward(self, images, history_yaws = [], history_positions = [], speeds = []):
         # print("########x########", x.shape)
         x = self.backbone.conv1(images)
         x = self.backbone.bn1(x)
@@ -456,20 +562,49 @@ class LyftMultiModel(LightningModule):
         x = self.backbone.layer4(x)
 
         # print("########avgpool########")
+        # print("#############x shape#############", x.shape)
         x = self.backbone.avgpool(x)
+        # print("#############x shape#############", x.shape)
+        # x = self.pool3d(x)
         x = torch.flatten(x, 1)
         # print("########head########", x.shape)
         # print("########head########", self.head)
+
         if len(history_yaws) != 0:
-            # print("#############history_yaws shape#############", history_yaws)
-            # print("#############history_position#############", history_position)
-            # history_set = torch.cat((history_yaws, history_position), dim=2)
+            speeds = torch.flatten(speeds, 1)
             history_yaws = torch.flatten(history_yaws, 1)
-            history_position = torch.flatten(history_position, 1)
-            # print("#############history_set#############", history_set.shape)
-            #   print("#############history_yaws shape#############", history_yaws.shape)
-            #   print("#############speeds shape#############", speeds.shape)
-            #   print("#############speeds info#############", speeds)
+            history_positions = torch.flatten(history_positions, 1)
+            
+
+            
+            # print("#############history_set shape#############", history_set.shape)
+
+            
+
+            # outs = []
+            # features = self.resnet1(x)
+            # out = self.deconv1(features)
+            # # outs.append(out)
+            # features = self.resnet2(out)
+            # out = self.deconv2(features)
+            # outs.append(out)
+            # features = self.resnet3(out)
+            # out = self.deconv3(features)
+            # # outs.append(out)
+            # features = self.resnet4(out)
+            # out = self.deconv4(features)
+            # outs.append(out)
+
+            # out = out.permute(0, 2, 1)
+            # features, _ = self.rnn(out)
+            # for feature in aaaa:
+            # print("#############features shape#############", features.shape)
+            
+            # features = torch.cat(outs, dim=1).permute(0, 2, 1)
+            # features = torch.flatten(out, 1)
+            # print("#############aaaa shape#############", features.shape)
+
+            # features = self.history_set_head(history_set)
             # outs = []
             # feature, _ = self.yaws_rnn1(history_set)
             # out = self.yaws_deconv1(feature.permute(0, 2, 1)).permute(0, 2, 1)
@@ -480,23 +615,70 @@ class LyftMultiModel(LightningModule):
             # feature = torch.cat(outs, dim=-1)
             # feature = nn.functional.normalize(feature, p=2, dim=2)
 
-            # print("#############feature shape#############", feature.shape)
-            # print("#############feature info#############", feature)
 
-            # history_yaws = torch.flatten(history_yaws, 1)
+
+
+            # print("#############speeds shape#############", speeds)
+            features = torch.cat((x, speeds, history_yaws, history_positions), dim=1)
+            # x = x.permute(0, 2, 1)
+
+            # outs = []
+            # feature, _ = self.rnn1(x)
+            # out = self.deconv1(feature.permute(0, 2, 1)).permute(0, 2, 1)
+            # outs.append(out)
+            # feature, _ = self.rnn2(feature)
+            # out = self.deconv2(feature.permute(0, 2, 1)).permute(0, 2, 1)
+            # outs.append(out)
+            # features, _ = self.rnn(x)
+            # features = self.batchNorm(features)
+            # features = self.dropOut(features)
+            # print("#############out info#############", features.shape)
+
+            # feature, _ = self.yaws_rnn1(history_yaws)
+            # out = self.deconv1(feature.permute(0, 2, 1)).permute(0, 2, 1)
+            # outs.append(out)
+            # feature, _ = self.rnn2(feature)
+            # out = self.deconv2(feature.permute(0, 2, 1)).permute(0, 2, 1)
+            # outs.append(out)
+            
+            # for out in outs:
+            #     print("#############out info#############", out.shape)
+            # features = torch.cat(outs, dim=-1)
+
+            # outs = torch.flatten(feature, 1)
+            # outs = self.feture_linear(outs)
+
+            # print("#############outs shape#############", outs.shape)
+            # print("#############feature info#############", x.shape)
+
         
-            # print("#############history_yaws#############", x.shape, history_yaws.shape, self.yaw_head)
-            history_yaws_features = self.yaw_head(history_yaws)
-            history_position_features = self.position_head(history_position)
-            x = torch.cat((x, history_yaws_features, history_position_features), 1)
-            # print("#############yaw info#############", history_yaws.shape)
-            # print("#############x info#############", x)
-            # yaw = torch.abs(history_yaws)
-            # yaw_norm = torch.div(yaw+1e-10, 7.079)
-            # for i in range(yaw.shape[0]):
-            # x[i] = torch.mul(x[i], yaw_norm[i])
-            # x = self.yaw_head(x)
-            x = self.parend_head(x)
+            # history_yaws_features = self.yaw_head(history_yaws)
+            # history_position_features = self.position_head(history_position)
+            # x = torch.cat((x, history_yaws_features, history_position_features), 1)
+
+            
+            # x = torch.cat((x, features), 1)
+
+            # features = self.pool2d(features)
+            # features = torch.flatten(features, 1)
+            x = self.parend_head(features)
+            # print("#############feature info#############", x.shape)
+            x = x.view(x.shape[0], 50, -1)
+            # print("#############feature info#############", x.shape)
+            outs = []
+            features, _ = self.rnn1(x)
+            out = self.deconv1(features.permute(0,2,1)).permute(0,2,1)
+            outs.append(out)
+            features, _ = self.rnn2(features)
+            out = self.deconv2(features.permute(0,2,1)).permute(0,2,1)
+            outs.append(out)
+            features = torch.cat(outs, dim=-1)
+            # print("#############feature info#############", features.shape)
+            features = self.batchNorm(features)
+            # x = self.dropOut(x)
+            x = torch.flatten(features, 1)
+            # print("#############feature info#############", x.shape)
+
         else:
           x = self.head(x)
         # x = self.logit(x)
@@ -510,23 +692,27 @@ class LyftMultiModel(LightningModule):
         images = batch["image"]
         target_availabilities = batch["target_availabilities"]
         targets = batch["target_positions"]
-        history_yaws = torch.mul(batch["history_yaws"], 100)
-        # history_yaws = torch.abs(history_yaws)
-        # history_yaws = torch.div(history_yaws, 2.0)
-        # u_point = batch["history_positions"][:, :1, :].detach().cpu().numpy()
-        # print("###################history shape###################\n",batch["history_positions"].shape)
-        # print("###################keys info###################\n",batch.keys())
-        # print("###################history position###################\n",batch["history_positions"])
-        # pu_point = batch["history_positions"][:, 1, :].detach().cpu().numpy()
-        # speeds = (u_point[:, 0, :] - pu_point)
-        # print("###################speed shape###################\n",speeds.shape)
-        # print("###################speed position###################\n",speeds)
-        history_position = batch["history_positions"]
-        # print("###################yaws shape###################\n", history_yaws.shape)
-        # print("###################yaws position###################\n", history_yaws)
-        # print("###################history shape###################\n", history_position.shape)
-        # print("###################history position###################\n", history_position)
-        pred, confidences = self(images, history_yaws, history_position)
+        history_yaws = batch["history_yaws"]
+        history_positions = batch["history_positions"]
+        position_x = history_positions[:, :, 0]
+        position_y = history_positions[:, :, 1]
+        # print("#############tensor#############", batch["history_positions"].shape)
+        # print("#############tensor#############", position_x[:, :-1].shape)
+        # print("#############tensor#############", torch.unsqueeze(self.previous_postiion_x, 0).shape)
+        speeds = torch.zeros(position_x.shape[0], position_x.shape[1], dtype=torch.float32, device=self.my_device)
+        for i in range(position_x.shape[0]):
+            sub_position_x = torch.cat((torch.unsqueeze(self.previous_postiion_x, 0),position_x[i, 1:]))
+            sub_position_y = torch.cat((torch.unsqueeze(self.previous_postiion_x, 0),position_y[i, 1:]))
+            select_position_x = torch.cat((position_x[i, :1], position_x[i, :-1]))
+            select_position_y = torch.cat((position_y[i, :1], position_y[i, :-1]))
+            speeds[i] = torch.add(torch.abs(torch.sub(sub_position_x, select_position_x)), torch.abs(torch.sub(sub_position_y, select_position_y)))
+        self.previous_postiion_x = position_x[-1,-1]
+        self.previous_postiion_y = position_y[-1,-1]
+        speeds = torch.unsqueeze(speeds, -1)
+        # self.previous_postiion_x = position_x[-1, -1, -1]
+        # self.previous_postiion_y = position_y[-1, -1, -1]
+        # speeds = torch.add(torch.abs(torch.sub(sub_position_x, position_x)), torch.abs(torch.sub(sub_position_y, position_y)))
+        pred, confidences = self(images, history_yaws, history_positions, speeds)
         bs, _ = pred.shape
         preds = pred.view(bs, self.num_modes, self.future_len, 2)
         assert confidences.shape == (bs, self.num_modes)
@@ -539,14 +725,27 @@ class LyftMultiModel(LightningModule):
         images = batch["image"]
         target_availabilities = batch["target_availabilities"]
         targets = batch["target_positions"]
-        history_yaws = torch.mul(batch["history_yaws"], 100)
-        # history_yaws = torch.abs(history_yaws)
-        # history_yaws = torch.div(history_yaws, 2.0)
-        # u_point = batch["history_positions"][:, :1, :].detach().cpu().numpy()
-        # pu_point = batch["history_positions"][:, 1, :].detach().cpu().numpy()
-        # speeds = (u_point[:, 0, :] - pu_point)
-        history_position = batch["history_positions"]
-        pred, confidences = self(images, history_yaws, history_position)
+        history_yaws = batch["history_yaws"]
+        history_positions = batch["history_positions"]
+        position_x = history_positions[:, :, 0]
+        position_y = history_positions[:, :, 1]
+        # print("#############tensor#############", batch["history_positions"].shape)
+        # print("#############tensor#############", position_x[:, :-1].shape)
+        # print("#############tensor#############", torch.unsqueeze(self.previous_postiion_x, 0).shape)
+        speeds = torch.zeros(position_x.shape[0], position_x.shape[1], dtype=torch.float32, device=self.my_device)
+        for i in range(position_x.shape[0]):
+            sub_position_x = torch.cat((torch.unsqueeze(self.previous_postiion_x, 0),position_x[i, 1:]))
+            sub_position_y = torch.cat((torch.unsqueeze(self.previous_postiion_x, 0),position_y[i, 1:]))
+            select_position_x = torch.cat((position_x[i, :1], position_x[i, :-1]))
+            select_position_y = torch.cat((position_y[i, :1], position_y[i, :-1]))
+            speeds[i] = torch.add(torch.abs(torch.sub(sub_position_x, select_position_x)), torch.abs(torch.sub(sub_position_y, select_position_y)))
+        self.previous_postiion_x = position_x[-1,-1]
+        self.previous_postiion_y = position_y[-1,-1]
+        speeds = torch.unsqueeze(speeds, -1)
+        # self.previous_postiion_x = position_x[-1, -1, -1]
+        # self.previous_postiion_y = position_y[-1, -1, -1]
+        # speeds = torch.add(torch.abs(torch.sub(sub_position_x, position_x)), torch.abs(torch.sub(sub_position_y, position_y)))
+        pred, confidences = self(images, history_yaws, history_positions, speeds)
         bs, _ = pred.shape
         preds = pred.view(bs, self.num_modes, self.future_len, 2)
         assert confidences.shape == (bs, self.num_modes)
@@ -599,15 +798,18 @@ class LyftMultiModel(LightningModule):
 
 
 
-model_name = cfg["model_params"]["model_name"]
-model = LyftMultiModel()
+
+device_version = 1
+model = LyftMultiModel(device_version)
 model.to("cuda")
 
+model_name = cfg["model_params"]["model_name"]
 weight_path = cfg["model_params"]["weight_path"]
 if weight_path:
     model.load_state_dict(torch.load(weight_path)['state_dict'])
 
-trainer = Trainer(max_epochs=5, limit_val_batches=0.2, gpus=[0])
+
+trainer = Trainer(max_epochs=5, limit_val_batches=0.2, gpus=[device_version])
 
 trainer.fit(model)
 
