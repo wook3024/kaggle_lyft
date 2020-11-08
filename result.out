@@ -1,0 +1,60 @@
+# 1: python - original - val_loss: 52.99660110473633
+
+# 1: python - positions, torch.mul(batch["history_yaws"],100) - val_loss: 31.693580627441406
+# 2: python - positions, batch["history_yaws"] - val_loss: 32.278594970703125
+
+# 1: python - batch["history_yaws"] - val_loss: 39.633397598266016
+# 2: python - torch.mul(batch["history_yaws"],10) - val_loss: 70.02664184570312
+
+# 1: python - custom_speeds, yaws, positions  - val_loss: 41.73029708862305
+# 2: python - custom_speeds, yaws, positions + lstm + batchnorm? - val_loss: 30.707447052001953
+
+# 1: python - custom_speeds, yaws  - val_loss: val_loss: 52.48950958251953
+# 2: python - custom_speeds, yaws, positions + lstm + batchnorm? - val_loss: 30.707447052001953
+
+# 1: python - custom_speeds, yaws, positions + lstm(+deconv) - val_loss: 35.878517150878906
+# 2: python - yaws, positions + lstm(+deconv) - val_loss: 45.2903938293457
+
+# 1: python - backbone_output+(speeds,yaw,positions) + lstm(+deconv) - val_loss: 62.94742202758789
+# 2: python - backbone_output+(yaw,positions) + lstm(+deconv) - val_loss: 43.2364501953125
+
+# 1: python - backbone_output+(speeds,yaw,positions) + lstm_hidden32 - val_loss: 46.663333892822266
+# 2: python - backbone_output+(speeds,yaw,positions) + lstm_hidden64 - val_loss: 44.476924896240234
+
+# 1: python - backbone_output+(speeds,yaw,positions) + lstm_hidden32 + remove_head - val_loss: 84.59651184082031
+# 2: python - backbone_output+(speeds,yaw,positions) + lstm_hidden64 + remove_head - val_loss: 55.78352737426758
+
+# 1: python - lstm64(linear(image+speeds+yaws+positions)) - val_loss: 48.4294548034668
+# 2: python - lstm128(linear(image+speeds+yaws+positions)) - val_loss: 34.86284637451172
+
+# 1: python - backbone_output+(speeds,yaw,positions) + lstm_hidden64 + batchnorm1d + tanh - val_loss: 40.07908630371094
+# 2: python - backbone_output+(speeds,yaw,positions) + lstm_hidden64 + batchnorm1d - val_loss: 36.8831787109375
+
+# 1: python - backbone_output+(speeds,yaw,positions) + conv1(11,50) + batchnorm1d + tanh + lstm_hidden64 + batchnorm1d + tanh - val_loss: 39.559913635253906
+# 2: python - backbone_output+(speeds,yaw,positions) + conv1(11,50) + batchnorm1d + tanh + lstm_hidden64 + batchnorm1d + tanh + val_normalize1 - val_loss: 38.054725646972656
+
+# 1: python - backbone_output+(speeds,yaw,positions) + conv1(11,50) + batchnorm1d + relu + lstm_hidden64 + val_normalize1 - val_loss: 54.45206832885742
+# 2: python - backbone_output+(speeds,yaw,positions) + conv1(11,50) + batchnorm1d + relu + lstm_hidden64 + batchnorm1d + val_normalize1 - val_loss: 42.294715881347656
+
+# 1: python - backbone_output+(speeds,yaw,positions) + tanh + conv1(11,50) + batchnorm1d + tanh + lstm_hidden64 + batchnorm1d + tanh + val_normalize1(-1,1) - val_loss: 45.410560607910156
+# 2: python - backbone_output+(speeds,yaw,positions) + tanh + conv1(11,50) + batchnorm1d + tanh + lstm_hidden64 + val_normalize1(-1, 1) - val_loss: 42.58598327636719
+
+# 1: python - backbone_output+(speeds,yaw,positions) + tanh + lstm_hidden64 + batchnorm1d + val_normalize1(-1,1)_minus_fix - val_loss: 52.81998062133789
+# 2: python - backbone_output+(speeds,yaw,positions) + tanh + lstm_hidden128 + batchnorm1d + val_normalize1(-1,1)_minus_fix - val_loss: 42.0929069519043
+
+# 1: python - backbone_output+(speeds,yaw,positions) + batchnorm1d(each features(x, speeds, yaws, positions)) + lstm_hidden64 + batchnorm1d - val_loss: 34.991085052490234 뽀록??
+# 2: python - backbone_output+(speeds,yaw,positions) + batchnorm1d(each features(x, speeds, yaws, positions)) + lstm_hidden64 - val_loss: 56.001304626464844
+
+# 1: python - backbone_output+(speeds,yaw,positions) + batchnorm1d(each features(x, speeds, yaws, positions)) + lstm_hidden128 + batchnorm1d - val_loss: 47.05419158935547
+# 2: python - backbone_output+(speeds,yaw,positions) + batchnorm1d(each features(x, speeds, yaws, positions)) + lstm_hidden256 + batchnorm1d - val_loss: 40.637874603271484
+
+# 1: python - backbone_output+(yaw,positions) + batchnorm1d(each features(x, yaws, positions)) + lstm_hidden256 + batchnorm1d - v_num=321]val_loss: 68.34342956542969
+# 2: python - backbone_output+(yaw,positions) + batchnorm1d(each features_frame-1(x, speeds, yaws, positions)) + lstm_hidden256 + batchnorm1d - val_loss: 67.18599700927734
+
+# 1: python - (x, yaws, positions) - val_loss: 39.19384765625
+
+# 1: python - (x, yaws, positions) + linear->lstm64 + batchnorm - val_loss: 41.38983154296875
+# 2: python - (x, yaws, positions) + linear->lstm64 - val_loss: 57.330074310302734
+
+# 1: python - (x, yaws, positions) + linear(relu)->lstm64 - 
+# 2: python - (x, yaws, positions) + linear->lstm128 + batchnorm
