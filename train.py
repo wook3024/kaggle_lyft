@@ -75,12 +75,12 @@ cfg = {
         'future_num_frames': 50,
         'future_step_size': 1,
         'future_delta_time': 0.1,
-        'model_name': "train_resnest50+267+adamp+0.5+15+1e-4+threshold_0.5",
+        'model_name': "train_resnest50+267+adamp+0.5+15+1e-4+threshold_0.5+history_yaws+history_positions",
         # 'model_name': "lr_finder_train",
         'lr': 1e-4,
-        # 'weight_path': "./result/train/train_resnest50+267+adamp+0.5+15+1e-4+threshold_0.5/models/save_model_epoch1_20000.pth",
+        'weight_path': "./result/train/train_resnest50+267+adamp+0.5+15+1e-4+threshold_0.5/pytorch_lightning-models-v51.ckpt",
         # 'weight_path': "./model_resnet34_output_0.pth",
-        'weight_path': None,
+        # 'weight_path': None,
         'train': True,
         'predict': False
     },
@@ -105,15 +105,15 @@ cfg = {
     
     'test_data_loader': {
         'key': 'scenes/test.zarr',
-        'batch_size': 8,
+        'batch_size': 48,
         'shuffle': False,
-        'num_workers': 4
+        'num_workers': 8
     },
     'val_data_loader': {
         'key': 'scenes/validate.zarr',
-        'batch_size': 8,
+        'batch_size': 48,
         'shuffle': False,
-        'num_workers': 4
+        'num_workers': 8
     },
 
     'train_params': {
@@ -417,75 +417,95 @@ class LyftMultiModel(LightningModule):
         num_targets = 2 * self.future_len
 
         # You can add more layers here.
-        self.head = nn.Sequential(
+        self.add_features_head = nn.Sequential(
             # nn.Dropout(0.2),
-            nn.Linear(in_features=backbone_out_features, out_features=4096),
+            nn.Linear(in_features=backbone_out_features+33, out_features=4096),
         )
-
+        # self.head = nn.Sequential(
+        #     nn.Linear(in_features=backbone_out_features, out_features=4096),
+        # )
+        
         self.num_preds = num_targets * self.num_modes
-
 
         self.x_preds = nn.Linear(4096, out_features=self.num_preds)
         self.x_modes = nn.Linear(4096, out_features=self.num_modes)
 
         # self.logit = nn.Linear(4096, out_features=self.num_preds + self.num_modes)
 
-    def forward(self, x):
-        x = self.backbone.conv1(x)
+    def forward(self, images, history_yaws, history_positions):
+        # print("########x########", x.shape)
+        x = self.backbone.conv1(images)
         x = self.backbone.bn1(x)
         x = self.backbone.relu(x)
         x = self.backbone.maxpool(x)
 
+        # print("########layer########")
         x = self.backbone.layer1(x)
         x = self.backbone.layer2(x)
         x = self.backbone.layer3(x)
         x = self.backbone.layer4(x)
 
+        # print("########avgpool########")
         x = self.backbone.avgpool(x)
         x = torch.flatten(x, 1)
+        # print("########head########", x.shape)
+        # print("########head########", self.head)
+        history_yaws = torch.flatten(history_yaws, 1)
+        history_positions = torch.flatten(history_positions, 1)
+        features = torch.cat((x, history_yaws, history_positions), dim=1)
 
-        x = self.head(x)
-
-        preds = self.x_preds(x)
-        modes = self.x_modes(x)
+        
+        features = self.add_features_head(features)
         # x = self.logit(x)
-   
+        
+        preds = self.x_preds(features)
+        modes = self.x_modes(features)
+        # print("########pred, modes########", pred.shape, modes.shape)
+        # pred (batch_size)x(modes)x(time)x(2D coords)
+        # confidences (batch_size)x(modes)
+        
+        # bs, _ = x.shape
+        # pred, confidences = torch.split(x, self.num_preds, dim=1)
+        # pred = pred.view(bs, self.num_modes, self.future_len, 2)
+        # assert confidences.shape == (bs, self.num_modes)
+        # confidences = torch.softmax(confidences, dim=1)
+        # return pred, confidences
         return preds, modes
     
 
     def training_step(self, batch, batch_idx):
-        inputs = batch["image"]
+        images = batch["image"]
         target_availabilities = batch["target_availabilities"]
         targets = batch["target_positions"]
-        pred, confidences = self(inputs)
+        history_yaws = torch.mul(batch["history_yaws"], 1.6)
+        history_positions = batch["history_positions"]
+        history_positions[:,:,0] = torch.div(history_positions[:,:,0],6.0)
+        history_positions[:,:,1] = torch.div(history_positions[:,:,1],1.9)
+        
+        pred, confidences = self(images, history_yaws, history_positions)
         bs, _ = pred.shape
         preds = pred.view(bs, self.num_modes, self.future_len, 2)
         assert confidences.shape == (bs, self.num_modes)
         confidences = torch.softmax(confidences, dim=1)
-        # Forward pass
         loss = pytorch_neg_multi_log_likelihood_batch(targets, preds, confidences, target_availabilities)
-        # return pred, confidences
-        # train_logs = {
-        #     'loss': loss,
-        # }
-        
         return loss
 
     @torch.no_grad()
     def validation_step(self, batch, batch_idx):
-        inputs = batch["image"]
+        images = batch["image"]
         target_availabilities = batch["target_availabilities"]
         targets = batch["target_positions"]
-        # x = self(inputs)
-        pred, confidences = self(inputs)
+        history_yaws = torch.mul(batch["history_yaws"], 1.6)
+        history_positions = batch["history_positions"]
+        history_positions[:,:,0] = torch.div(history_positions[:,:,0],6.0)
+        history_positions[:,:,1] = torch.div(history_positions[:,:,1],1.9)
+        
+        pred, confidences = self(images, history_yaws, history_positions)
         bs, _ = pred.shape
-        # pred, confidences = torch.split(x, self.num_preds, dim=1)
         preds = pred.view(bs, self.num_modes, self.future_len, 2)
         assert confidences.shape == (bs, self.num_modes)
         confidences = torch.softmax(confidences, dim=1)
-        # Forward pass
         loss = pytorch_neg_multi_log_likelihood_batch(targets, preds, confidences, target_availabilities)
-        # return pred, confidences
 
         val_logs = {
             'val_loss': loss,
@@ -567,46 +587,22 @@ logger = TensorBoardLogger(
     name='lightning_logs'
 )
 
-model = LyftMultiModel()
+# model = LyftMultiModel()
+weight_path = cfg["model_params"]["weight_path"]
+model = LyftMultiModel.load_from_checkpoint(weight_path, strict=False)
 model.to("cuda")
 
-weight_path = cfg["model_params"]["weight_path"]
-if weight_path:
-    model.load_state_dict(torch.load(weight_path)['state_dict'])
+# if weight_path:
+#     model.load_state_dict(torch.load(weight_path)['state_dict'])
 
 trainer = Trainer(logger=logger, 
                   checkpoint_callback=checkpoint_callback, 
                   val_check_interval=10000,
                   limit_val_batches=1000, 
-                  gpus=[0,1], 
-                  distributed_backend='ddp')
+                  gpus=2, 
+                  accelerator='ddp')
 
-# # Run learning rate finder
-# lr_finder = trainer.tuner.lr_find(model)
-
-# # Results can be found in
-# lr_finder.results
-
-# # Plot with
-# fig = lr_finder.plot(suggest=True)
-# fig.show()
-
-# # Pick point based on plot, or get suggestion
-# new_lr = lr_finder.suggestion()
-# print(f'lr_finder: {lr_finder}')
-# print(f'new_lr: {new_lr}')
-
-# # update hparams of the model
-# model.lr = new_lr
-
-# # Fit model
-# trainer.fit(model)
 trainer.fit(model)
-
-# trainer = Trainer(auto_lr_find=True, gpus=[1])
-# trainer.tune(model)
-
-
 
 
 
