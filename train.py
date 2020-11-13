@@ -75,7 +75,7 @@ cfg = {
         'future_num_frames': 50,
         'future_step_size': 1,
         'future_delta_time': 0.1,
-        'model_name': "train_resnest50+267+adamp+0.5+15+1e-4+threshold_0.5+history_yaws+history_positions",
+        'model_name': "train_resnest50_image_conv1d11_2+historys_conv1d11_2",
         # 'model_name': "lr_finder_train",
         'lr': 1e-4,
         'weight_path': "./result/train/train_resnest50+267+adamp+0.5+15+1e-4+threshold_0.5/pytorch_lightning-models-v51.ckpt",
@@ -98,20 +98,20 @@ cfg = {
 
     'train_data_loader': {
         'key': 'scenes/train.zarr',
-        'batch_size': 48,
+        'batch_size': 46,
         'shuffle': True,
         'num_workers': 8
     },
     
     'test_data_loader': {
         'key': 'scenes/test.zarr',
-        'batch_size': 48,
+        'batch_size': 46,
         'shuffle': False,
         'num_workers': 8
     },
     'val_data_loader': {
         'key': 'scenes/validate.zarr',
-        'batch_size': 48,
+        'batch_size': 46,
         'shuffle': False,
         'num_workers': 8
     },
@@ -198,6 +198,8 @@ print("==================================TRAIN DATA=============================
 print(train_dataset)
 print("==================================VAL DATA==================================")
 print(val_dataset)
+
+
 
 
 # ## Simple visualization
@@ -417,18 +419,56 @@ class LyftMultiModel(LightningModule):
         num_targets = 2 * self.future_len
 
         # You can add more layers here.
-        self.add_features_head = nn.Sequential(
-            # nn.Dropout(0.2),
-            nn.Linear(in_features=backbone_out_features+33, out_features=4096),
-        )
+        # self.add_features_head = nn.Sequential(
+        #     # nn.Dropout(0.2),
+        #     # nn.Linear(in_features=backbone_out_features+33, out_features=4096),
+        # )
         # self.head = nn.Sequential(
         #     nn.Linear(in_features=backbone_out_features, out_features=4096),
         # )
-        
+        self.conv1d_lstm_head = nn.Sequential(
+            nn.Linear(in_features=11*59, out_features=4096),
+        )
+
         self.num_preds = num_targets * self.num_modes
 
         self.x_preds = nn.Linear(4096, out_features=self.num_preds)
         self.x_modes = nn.Linear(4096, out_features=self.num_modes)
+
+        kernsel_size=3
+        self.conv1d_family1 = nn.Sequential(
+            nn.Conv1d(in_channels=32, out_channels=11, kernel_size=kernsel_size, stride=1),
+            nn.BatchNorm1d(11),
+            nn.LeakyReLU(inplace=True),
+            # nn.Tanh
+        )
+
+        self.conv1d_family2 = nn.Sequential(
+            nn.Conv1d(in_channels=11, out_channels=11, kernel_size=kernsel_size, stride=1),
+            nn.BatchNorm1d(11),
+            nn.LeakyReLU(inplace=True),
+            # nn.Tanh
+        )
+
+        self.conv1d_family_last1 = nn.Sequential(
+            nn.Conv1d(in_channels=11, out_channels=11, kernel_size=kernsel_size, stride=1),
+            nn.BatchNorm1d(11),
+            nn.LeakyReLU(inplace=True),
+        )
+        self.conv1d_family_last2 = nn.Sequential(
+            nn.Conv1d(in_channels=11, out_channels=11, kernel_size=kernsel_size, stride=1),
+            nn.BatchNorm1d(11),
+            nn.LeakyReLU(inplace=True),
+        )
+
+        # self.lstm_batchnorm1d = nn.BatchNorm1d(11)
+        # self.rnn = nn.LSTM(
+        #     59,
+        #     64,
+        #     num_layers=2,
+        #     batch_first=True,
+        #     bidirectional=True,
+        # )
 
         # self.logit = nn.Linear(4096, out_features=self.num_preds + self.num_modes)
 
@@ -448,14 +488,27 @@ class LyftMultiModel(LightningModule):
         # print("########avgpool########")
         x = self.backbone.avgpool(x)
         x = torch.flatten(x, 1)
+
+        x = x.view(x.shape[0], 32, 64)
+        # print(features.shape)
+        x = self.conv1d_family1(x)
+        x = self.conv1d_family2(x)
         # print("########head########", x.shape)
         # print("########head########", self.head)
-        history_yaws = torch.flatten(history_yaws, 1)
-        history_positions = torch.flatten(history_positions, 1)
-        features = torch.cat((x, history_yaws, history_positions), dim=1)
+        # x = torch.flatten(x, 1)
+        # history_yaws = torch.flatten(history_yaws, 1)
+        # history_positions = torch.flatten(history_positions, 1)
+        features = torch.cat((x, history_yaws, history_positions), dim=2)
 
+        features = self.conv1d_family_last1(features)
+        features = self.conv1d_family_last2(features)
+        # features, _ = self.rnn(features)
+        # features = self.lstm_batchnorm1d(features)
         
-        features = self.add_features_head(features)
+        features = torch.flatten(features, 1)
+        
+        # print("########shape########", features.shape)
+        features = self.conv1d_lstm_head(features)
         # x = self.logit(x)
         
         preds = self.x_preds(features)
@@ -518,6 +571,7 @@ class LyftMultiModel(LightningModule):
         
 
     def validation_epoch_end(self, validation_step_outputs):
+
         avg_val_loss = torch.mean(torch.tensor([x['val_loss'] for x in validation_step_outputs])).item()
         # avg_loss = self.avg_loss
 
@@ -573,6 +627,7 @@ class LyftMultiModel(LightningModule):
 #     return loss, preds, confidences
 
 model_name = cfg["model_params"]["model_name"]
+# model_name = "./result/train/pytorch_lightning-models-v51.ckpt"
 checkpoint_callback = ModelCheckpoint(
     filepath=Path(f'{os.getcwd()}/result/train/{model_name}/models'),
     save_top_k=1000000,
@@ -588,8 +643,9 @@ logger = TensorBoardLogger(
 )
 
 # model = LyftMultiModel()
-weight_path = cfg["model_params"]["weight_path"]
-model = LyftMultiModel.load_from_checkpoint(weight_path, strict=False)
+# weight_path = cfg["model_params"]["weight_path"]
+weight_path = "./result/train/pytorch_lightning-epoch=0-v0.ckpt"
+model = LyftMultiModel.load_from_checkpoint(weight_path)
 model.to("cuda")
 
 # if weight_path:
@@ -597,7 +653,7 @@ model.to("cuda")
 
 trainer = Trainer(logger=logger, 
                   checkpoint_callback=checkpoint_callback, 
-                  val_check_interval=10000,
+                  val_check_interval=20000,
                   limit_val_batches=1000, 
                   gpus=2, 
                   accelerator='ddp')
