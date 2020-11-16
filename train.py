@@ -9,6 +9,7 @@ import torch
 from torch import nn, optim
 from torch.utils.data import DataLoader
 from torchvision.models.resnet import resnet50, resnet18, resnet34, resnet101
+from warmup_scheduler import GradualWarmupScheduler
 from tqdm import tqdm
 
 import l5kit
@@ -75,7 +76,7 @@ cfg = {
         'future_num_frames': 50,
         'future_step_size': 1,
         'future_delta_time': 0.1,
-        'model_name': "train_resnest50_image_conv1d11_2+historys_conv1d11_2",
+        'model_name': "train_resnest101_image_historys_conv1d11_2_data_sampling_hard",
         # 'model_name': "lr_finder_train",
         'lr': 1e-4,
         'weight_path': "./result/train/train_resnest50+267+adamp+0.5+15+1e-4+threshold_0.5/pytorch_lightning-models-v51.ckpt",
@@ -98,28 +99,23 @@ cfg = {
 
     'train_data_loader': {
         'key': 'scenes/train.zarr',
-        'batch_size': 46,
+        'batch_size': 32,
         'shuffle': True,
         'num_workers': 8
     },
     
     'test_data_loader': {
         'key': 'scenes/test.zarr',
-        'batch_size': 46,
+        'batch_size': 32,
         'shuffle': False,
         'num_workers': 8
     },
     'val_data_loader': {
         'key': 'scenes/validate.zarr',
-        'batch_size': 46,
-        'shuffle': False,
+        'batch_size': 32,
+        'shuffle': True,
         'num_workers': 8
     },
-
-    'train_params': {
-        'max_num_steps': 201,
-        'checkpoint_every_n_steps': 20,
-    }
 }
 
 # Couple of things to note:
@@ -190,6 +186,41 @@ val_dataset = AgentDataset(cfg, train_zarr, rasterizer)
 
 # cur_step = 50000
 # train_dataset = train_dataset[train_cfg["batch_size"] * 50000:]
+
+from torch.utils.data import Dataset
+import pickle
+
+
+
+file_name = "success_target_dataset_hard.pkl"
+open_file = open(file_name, "rb")
+
+create_dataset = pickle.load(open_file)
+print(len(create_dataset), create_dataset[0], create_dataset[-1])
+
+open_file.close()
+
+# random.shuffle(create_dataset)
+print(create_dataset[:30], create_dataset[-30:-1])
+
+
+class CustomDataset(Dataset): 
+  def __init__(self, create_dataset, train_dataset):
+    self.create_dataset = create_dataset
+    self.train_dataset = train_dataset
+
+  # 총 데이터의 개수를 리턴
+  def __len__(self): 
+    return len(self.create_dataset)
+
+  # 인덱스를 입력받아 그에 맵핑되는 입출력 데이터를 파이토치의 Tensor 형태로 리턴
+  def __getitem__(self, idx): 
+    data = self.train_dataset[idx]
+    return data
+
+train_dataset = CustomDataset(create_dataset, train_dataset)
+
+
 train_dataloader = DataLoader(train_dataset, shuffle=train_cfg["shuffle"], batch_size=train_cfg["batch_size"], 
                              num_workers=train_cfg["num_workers"], pin_memory=True)
 val_dataloader = DataLoader(val_dataset, shuffle=val_cfg["shuffle"], batch_size=val_cfg["batch_size"], 
@@ -316,6 +347,25 @@ def pytorch_neg_multi_log_likelihood_single(
 
 
 
+# class GradualWarmupSchedulerV2(GradualWarmupScheduler):
+#     def __init__(self, optimizer, multiplier, total_epoch, after_scheduler=None):
+#         super(GradualWarmupSchedulerV2, self).__init__(optimizer, multiplier, total_epoch, after_scheduler)
+#     def get_lr(self):
+#         if self.last_epoch > self.total_epoch:
+#             if self.after_scheduler:
+#                 if not self.finished:
+#                     self.after_scheduler.base_lrs = [base_lr * self.multiplier for base_lr in self.base_lrs]
+#                     self.finished = True
+#                 return self.after_scheduler.get_lr()
+#             return [base_lr * self.multiplier for base_lr in self.base_lrs]
+#         if self.multiplier == 1.0:
+#             return [base_lr * (float(self.last_epoch) / self.total_epoch) for base_lr in self.base_lrs]
+#         else:
+#             return [base_lr * ((self.multiplier - 1.) * self.last_epoch / self.total_epoch + 1.) for base_lr in self.base_lrs]
+
+
+
+
 
 class LyftMultiModel(LightningModule):
 
@@ -374,7 +424,7 @@ class LyftMultiModel(LightningModule):
         architecture = cfg["model_params"]["model_architecture"]
         # backbone = eval(architecture)(pretrained=True, progress=True)
         # backbone = torch.hub.load('pytorch/vision:v0.6.0', 'resnext101_32x8d', pretrained=True)
-        backbone = torch.hub.load('zhanghang1989/ResNeSt', 'resnest50', pretrained=True)
+        backbone = torch.hub.load('zhanghang1989/ResNeSt', 'resnest101', pretrained=True)
         
         # print(backbone)
         self.backbone = backbone
@@ -530,10 +580,14 @@ class LyftMultiModel(LightningModule):
         images = batch["image"]
         target_availabilities = batch["target_availabilities"]
         targets = batch["target_positions"]
-        history_yaws = torch.mul(batch["history_yaws"], 1.6)
+        # history_yaws = torch.mul(batch["history_yaws"], 1.6)
+        # history_positions = batch["history_positions"]
+        # history_positions[:,:,0] = torch.div(history_positions[:,:,0],6.0)
+        # history_positions[:,:,1] = torch.div(history_positions[:,:,1],1.9)
+        history_yaws = batch["history_yaws"]
         history_positions = batch["history_positions"]
-        history_positions[:,:,0] = torch.div(history_positions[:,:,0],6.0)
-        history_positions[:,:,1] = torch.div(history_positions[:,:,1],1.9)
+        history_positions[:,:,0] = torch.div(history_positions[:,:,0],10.0)
+        history_positions[:,:,1] = torch.div(history_positions[:,:,1],3.1)
         
         pred, confidences = self(images, history_yaws, history_positions)
         bs, _ = pred.shape
@@ -548,10 +602,14 @@ class LyftMultiModel(LightningModule):
         images = batch["image"]
         target_availabilities = batch["target_availabilities"]
         targets = batch["target_positions"]
-        history_yaws = torch.mul(batch["history_yaws"], 1.6)
+        # history_yaws = torch.mul(batch["history_yaws"], 1.6)
+        # history_positions = batch["history_positions"]
+        # history_positions[:,:,0] = torch.div(history_positions[:,:,0],6.0)
+        # history_positions[:,:,1] = torch.div(history_positions[:,:,1],1.9)
+        history_yaws = batch["history_yaws"]
         history_positions = batch["history_positions"]
-        history_positions[:,:,0] = torch.div(history_positions[:,:,0],6.0)
-        history_positions[:,:,1] = torch.div(history_positions[:,:,1],1.9)
+        history_positions[:,:,0] = torch.div(history_positions[:,:,0],10.0)
+        history_positions[:,:,1] = torch.div(history_positions[:,:,1],3.1)
         
         pred, confidences = self(images, history_yaws, history_positions)
         bs, _ = pred.shape
@@ -600,15 +658,37 @@ class LyftMultiModel(LightningModule):
 
     
 
+    # def configure_optimizers(self):
+    #     optimizer = AdamP(model.parameters(), lr=self.lr, betas=(0.9, 0.999), weight_decay=1e-2)
+    #     # optimizer = optim.Adam(model.parameters(), lr=self.lr)
+    #     # scheduler = optim.lr_scheduler.CosineAnnealingLR(
+    #     #     optimizer,
+    #     #     T_max=3,
+    #     #     eta_min=1e-5,
+    #     # )
+    #     return optimizer
     def configure_optimizers(self):
-        optimizer = AdamP(model.parameters(), lr=self.lr, betas=(0.9, 0.999), weight_decay=1e-2)
-        # optimizer = optim.Adam(model.parameters(), lr=self.lr)
-        # scheduler = optim.lr_scheduler.CosineAnnealingLR(
-        #     optimizer,
-        #     T_max=self.epochs,
-        #     eta_min=1e-5,
-        # )
-        return optimizer
+        optimizer = AdamP(model.parameters(), lr=self.lr, betas=(0.9, 0.999), weight_decay=1e-3)
+        # optimizer = optim.DiffGrad(model.parameters(), lr=self.lr, betas=(0.9, 0.999), eps=1e-8, weight_decay=0)
+        # scheduler = ReduceLROnPlateau(optimizer, 'min')
+        # scheduler_cosine = torch.optim.lr_scheduler.CosineAnnealingWarmRestarts(optimizer, max_epoch-1)
+        # scheduler_warmup = GradualWarmupSchedulerV2(optimizer, multiplier=10, total_epoch=1, after_scheduler=scheduler_cosine)
+        lr_scheduler = {'scheduler': torch.optim.lr_scheduler.CosineAnnealingWarmRestarts(optimizer, 20, eta_min=1e-5),
+                        'name': 'learning_rate',
+                        'interval':'step',
+                        'frequency': 1}
+
+        return [optimizer], [lr_scheduler]
+    # def configure_optimizers(self):
+    #     optimizer = AdamP(model.parameters(), lr=self.lr, betas=(0.9, 0.999), weight_decay=1e-2)
+    #     scheduler = {
+    #         'scheduler': ReduceLROnPlateau(optimizer, 'min', factor=0.5),
+    #         'monitor': 'val_loss',
+    #         'interval': 'epoch',
+    #         'frequency': 1,
+    #         'strict': True,
+    #     }
+    #     return [optimizer], [schedulers]
     
     def train_dataloader(self):
         return train_dataloader
@@ -644,8 +724,9 @@ logger = TensorBoardLogger(
 
 # model = LyftMultiModel()
 # weight_path = cfg["model_params"]["weight_path"]
-weight_path = "./result/train/pytorch_lightning-epoch=0-v0.ckpt"
-model = LyftMultiModel.load_from_checkpoint(weight_path)
+# weight_path = "./result/train/pytorch_lightning-models-v2.ckpt"
+# model = LyftMultiModel.load_from_checkpoint(weight_path)
+model = LyftMultiModel()
 model.to("cuda")
 
 # if weight_path:
@@ -653,8 +734,8 @@ model.to("cuda")
 
 trainer = Trainer(logger=logger, 
                   checkpoint_callback=checkpoint_callback, 
-                  val_check_interval=20000,
-                  limit_val_batches=1000, 
+                  val_check_interval=10000,
+                  limit_val_batches=500, 
                   gpus=2, 
                   accelerator='ddp')
 
